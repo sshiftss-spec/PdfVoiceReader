@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">قارئ PDF الصوتي</string>
+    <string name="open_pdf">فتح ملف PDF</string>
+    <string name="read_aloud">قراءة بصوت عالٍ</string>
+    <string name="pause">إيقاف مؤقت</string>
+    <string name="resume">استئناف</string>
+    <string name="stop">إيقاف</string>
+    <string name="previous">النص السابق</string>
+    <string name="next">النص التالي</string>
+    <string name="speed">سرعة القراءة</string>
+    <string name="no_file">لم يتم اختيار ملف</string>
+    <string name="loading">جاري تجهيز الملف…</string>
+    <string name="error">حدث خطأ</string>
+</resources>
