@@ -107,13 +107,23 @@ public class MainActivity extends AppCompatActivity {
 
             @Override public void onDone(String utteranceId) {
                 if (utteranceId.equals(currentUtteranceId)) {
-                    resumeCharIndex = 0;
-                    speechPaused = false;
-                    runOnUiThread(() -> status.setText("اكتملت قراءة المقطع " + (chunkIndex + 1)));
+                    runOnUiThread(() -> {
+                        // Ignore completion callbacks from an utterance that was stopped or replaced.
+                        if (!utteranceId.equals(currentUtteranceId) || speechPaused) return;
+                        resumeCharIndex = 0;
+                        if (chunkIndex + 1 < chunks.length) {
+                            chunkIndex++;
+                            speakRemaining();
+                        } else {
+                            status.setText("اكتملت قراءة مقاطع هذه الصفحة");
+                        }
+                    });
                 }
             }
 
-            @Override public void onError(String utteranceId) {}
+            @Override public void onError(String utteranceId) {
+                showSpeechError(utteranceId);
+            }
         });
     }
 
@@ -424,7 +434,7 @@ public class MainActivity extends AppCompatActivity {
                 for (int i = end; i > start + 500; i--) {
                     char c = text.charAt(i - 1);
                     if (c == '.' || c == '!' || c == '?' || c == '؟'
-                            || c == '؛' || c == ':' || c == '\n') {
+                            || c == '؛' || c == ':' || c == '۔' || c == '،' || c == '\n') {
                         boundary = i;
                         break;
                     }
@@ -504,6 +514,18 @@ public class MainActivity extends AppCompatActivity {
         if (!speechPaused && tts.isSpeaking()) return;
         speechPaused = false;
         speakRemaining();
+    }
+
+    private void showSpeechError(String utteranceId) {
+        if (utteranceId == null || !utteranceId.equals(currentUtteranceId)) return;
+        runOnUiThread(() -> {
+            if (!utteranceId.equals(currentUtteranceId)) return;
+            speechPaused = true;
+            status.setText("تعذر نطق المقطع الحالي");
+            Toast.makeText(this,
+                    "حدث خطأ أثناء النطق. اضغط «استئناف» للمحاولة مجددًا أو تحقق من إعدادات الصوت العربي.",
+                    Toast.LENGTH_LONG).show();
+        });
     }
 
     private void speakRemaining() {
