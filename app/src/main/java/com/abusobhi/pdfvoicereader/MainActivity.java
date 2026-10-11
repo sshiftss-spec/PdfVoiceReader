@@ -41,6 +41,7 @@ public class MainActivity extends AppCompatActivity {
     private SeekBar speedBar;
     private TextToSpeech tts;
     private String[] chunks = new String[0];
+    private String[][] pageChunks = new String[0][];
     private int chunkIndex = 0;
     private int currentPage = 0;
     private Uri currentUri;
@@ -179,17 +180,26 @@ public class MainActivity extends AppCompatActivity {
             if (newDescriptor == null) throw new IllegalStateException("تعذر فتح ملف PDF");
             newRenderer = new PdfRenderer(newDescriptor);
 
-            String[] extractedChunks = new String[0];
+            String[][] extractedPages = new String[0][];
             String extractionNote = "";
             try (InputStream in = getContentResolver().openInputStream(uri);
                  PDDocument doc = in == null ? null : PDDocument.load(in)) {
                 if (doc != null) {
-                    String text = new PDFTextStripper().getText(doc).trim();
-                    if (!text.isEmpty()) {
-                        extractedChunks = splitText(text, 3500);
-                    } else {
-                        extractionNote = getString(R.string.no_extractable_text);
+                    extractedPages = new String[doc.getNumberOfPages()][];
+                    boolean hasText = false;
+                    for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                        PDFTextStripper stripper = new PDFTextStripper();
+                        stripper.setStartPage(i + 1);
+                        stripper.setEndPage(i + 1);
+                        String pageText = stripper.getText(doc).trim();
+                        if (!pageText.isEmpty()) {
+                            extractedPages[i] = splitText(pageText, 3500);
+                            hasText = true;
+                        } else {
+                            extractedPages[i] = new String[0];
+                        }
                     }
+                    if (!hasText) extractionNote = getString(R.string.no_extractable_text);
                 } else {
                     extractionNote = getString(R.string.no_extractable_text);
                 }
@@ -199,20 +209,24 @@ public class MainActivity extends AppCompatActivity {
 
             final ParcelFileDescriptor readyDescriptor = newDescriptor;
             final PdfRenderer readyRenderer = newRenderer;
-            final String[] readyChunks = extractedChunks;
+            final String[][] readyPages = extractedPages;
             final String readyNote = extractionNote;
             newDescriptor = null;
             newRenderer = null;
             runOnUiThread(() -> {
+                if (tts != null) tts.stop();
                 closePdfRenderer();
                 pdfFileDescriptor = readyDescriptor;
                 pdfRenderer = readyRenderer;
-                chunks = readyChunks;
+                pageChunks = readyPages;
+                chunks = pageChunks.length > 0 ? pageChunks[0] : new String[0];
                 chunkIndex = 0;
                 currentPage = 0;
                 showPage(0);
                 if (readyNote.isEmpty()) {
-                    status.setText(getString(R.string.pdf_loaded, pdfRenderer.getPageCount(), chunks.length));
+                    int totalChunks = 0;
+                    for (String[] pageParts : pageChunks) totalChunks += pageParts.length;
+                    status.setText(getString(R.string.pdf_loaded, pdfRenderer.getPageCount(), totalChunks));
                 } else {
                     status.setText(getString(R.string.pdf_loaded_no_text, pdfRenderer.getPageCount()));
                     Toast.makeText(this, readyNote, Toast.LENGTH_LONG).show();
@@ -249,6 +263,7 @@ public class MainActivity extends AppCompatActivity {
     private void showPage(int index) {
         if (pdfRenderer == null) return;
         if (index < 0 || index >= pdfRenderer.getPageCount()) return;
+        if (index != currentPage && tts != null) tts.stop();
         try (PdfRenderer.Page page = pdfRenderer.openPage(index)) {
             int targetWidth = Math.min(1200, Math.max(600, getResources().getDisplayMetrics().widthPixels));
             int targetHeight = Math.max(1, (int) ((double) page.getHeight() * targetWidth / page.getWidth()));
@@ -256,6 +271,8 @@ public class MainActivity extends AppCompatActivity {
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
             pageImage.setImageBitmap(bitmap);
             currentPage = index;
+            chunks = index < pageChunks.length ? pageChunks[index] : new String[0];
+            chunkIndex = 0;
             pageCounter.setText(getString(R.string.page_counter, currentPage + 1, pdfRenderer.getPageCount()));
             previousPageButton.setEnabled(currentPage > 0);
             nextPageButton.setEnabled(currentPage + 1 < pdfRenderer.getPageCount());
