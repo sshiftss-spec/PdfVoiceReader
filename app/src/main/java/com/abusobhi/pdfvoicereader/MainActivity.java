@@ -9,6 +9,9 @@ import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.speech.tts.TextToSpeech;
 import android.view.View;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -47,6 +50,11 @@ public class MainActivity extends AppCompatActivity {
     private Uri currentUri;
     private ParcelFileDescriptor pdfFileDescriptor;
     private PdfRenderer pdfRenderer;
+    private ScaleGestureDetector scaleGestureDetector;
+    private GestureDetector gestureDetector;
+    private float pageZoom = 1f;
+    private float lastTouchX;
+    private float lastTouchY;
 
     private final ActivityResultLauncher<String[]> openPdf =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
@@ -121,6 +129,7 @@ public class MainActivity extends AppCompatActivity {
         pageImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
         pageImage.setBackgroundColor(Color.LTGRAY);
         pageImage.setContentDescription("معاينة صفحة PDF");
+        setupPageZoom();
         root.addView(pageImage, new LinearLayout.LayoutParams(-1, -2));
 
         readButton = makeButton(R.string.read_aloud, v -> speakCurrent());
@@ -162,6 +171,74 @@ public class MainActivity extends AppCompatActivity {
         });
         root.addView(speedBar);
         setContentView(scroll);
+    }
+
+    private void setupPageZoom() {
+        scaleGestureDetector = new ScaleGestureDetector(this,
+                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override public boolean onScale(ScaleGestureDetector detector) {
+                        pageZoom = Math.max(1f, Math.min(5f, pageZoom * detector.getScaleFactor()));
+                        pageImage.setScaleX(pageZoom);
+                        pageImage.setScaleY(pageZoom);
+                        if (pageZoom <= 1f) {
+                            pageImage.setTranslationX(0f);
+                            pageImage.setTranslationY(0f);
+                        }
+                        return true;
+                    }
+                });
+
+        gestureDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDown(MotionEvent event) {
+                return true;
+            }
+
+            @Override public boolean onDoubleTap(MotionEvent event) {
+                pageZoom = pageZoom > 1f ? 1f : 2.5f;
+                pageImage.setScaleX(pageZoom);
+                pageImage.setScaleY(pageZoom);
+                pageImage.setTranslationX(0f);
+                pageImage.setTranslationY(0f);
+                return true;
+            }
+        });
+
+        pageImage.setOnTouchListener((view, event) -> {
+            scaleGestureDetector.onTouchEvent(event);
+            gestureDetector.onTouchEvent(event);
+
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                lastTouchX = event.getX();
+                lastTouchY = event.getY();
+                view.getParent().requestDisallowInterceptTouchEvent(pageZoom > 1f);
+            } else if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) {
+                view.getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE && pageZoom > 1f
+                    && event.getPointerCount() == 1 && !scaleGestureDetector.isInProgress()) {
+                float dx = event.getX() - lastTouchX;
+                float dy = event.getY() - lastTouchY;
+                view.setTranslationX(view.getTranslationX() + dx);
+                view.setTranslationY(view.getTranslationY() + dy);
+                view.getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                view.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+
+            lastTouchX = event.getX();
+            lastTouchY = event.getY();
+            return true;
+        });
+    }
+
+    private void resetPageZoom() {
+        pageZoom = 1f;
+        if (pageImage != null) {
+            pageImage.setScaleX(1f);
+            pageImage.setScaleY(1f);
+            pageImage.setTranslationX(0f);
+            pageImage.setTranslationY(0f);
+        }
     }
 
     private Button makeButton(int text, View.OnClickListener listener) {
@@ -270,6 +347,7 @@ public class MainActivity extends AppCompatActivity {
             Bitmap bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
             pageImage.setImageBitmap(bitmap);
+            resetPageZoom();
             currentPage = index;
             chunks = index < pageChunks.length ? pageChunks[index] : new String[0];
             chunkIndex = 0;
