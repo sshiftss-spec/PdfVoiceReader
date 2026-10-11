@@ -1,13 +1,18 @@
 package com.abusobhi.pdfvoicereader;
 
-import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
 import android.speech.tts.TextToSpeech;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -26,14 +31,21 @@ import java.util.Locale;
 public class MainActivity extends AppCompatActivity {
     private TextView status;
     private TextView fileName;
+    private TextView pageCounter;
+    private ImageView pageImage;
     private Button readButton;
     private Button pauseButton;
     private Button stopButton;
+    private Button previousPageButton;
+    private Button nextPageButton;
     private SeekBar speedBar;
     private TextToSpeech tts;
     private String[] chunks = new String[0];
     private int chunkIndex = 0;
+    private int currentPage = 0;
     private Uri currentUri;
+    private ParcelFileDescriptor pdfFileDescriptor;
+    private PdfRenderer pdfRenderer;
 
     private final ActivityResultLauncher<String[]> openPdf =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
@@ -44,7 +56,6 @@ public class MainActivity extends AppCompatActivity {
                             Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } catch (SecurityException ignored) {
                     // Some document providers do not offer persistable permissions.
-                    // The URI is still readable for this Activity session.
                 }
                 String name = uri.getLastPathSegment();
                 fileName.setText(name != null ? name : "PDF");
@@ -67,9 +78,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void buildUi() {
+        ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(32, 32, 32, 32);
+        root.setPadding(32, 24, 32, 32);
+        scroll.addView(root);
 
         fileName = new TextView(this);
         fileName.setText(R.string.no_file);
@@ -88,14 +101,39 @@ public class MainActivity extends AppCompatActivity {
         status.setTextSize(18);
         root.addView(status);
 
+        pageCounter = new TextView(this);
+        pageCounter.setText(R.string.page_not_loaded);
+        pageCounter.setTextSize(18);
+        pageCounter.setGravity(android.view.Gravity.CENTER);
+        root.addView(pageCounter, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout pageControls = new LinearLayout(this);
+        pageControls.setOrientation(LinearLayout.HORIZONTAL);
+        previousPageButton = makeButton(R.string.previous_page, v -> showPage(currentPage - 1));
+        nextPageButton = makeButton(R.string.next_page, v -> showPage(currentPage + 1));
+        pageControls.addView(previousPageButton, new LinearLayout.LayoutParams(0, -2, 1));
+        pageControls.addView(nextPageButton, new LinearLayout.LayoutParams(0, -2, 1));
+        root.addView(pageControls);
+
+        pageImage = new ImageView(this);
+        pageImage.setAdjustViewBounds(true);
+        pageImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        pageImage.setBackgroundColor(Color.LTGRAY);
+        pageImage.setContentDescription("معاينة صفحة PDF");
+        root.addView(pageImage, new LinearLayout.LayoutParams(-1, -2));
+
         readButton = makeButton(R.string.read_aloud, v -> speakCurrent());
         pauseButton = makeButton(R.string.resume, v -> {
             if (tts != null && chunks.length > 0) {
-                // Android TextToSpeech has no true pause API. Re-read the current chunk.
+                // Android TextToSpeech has no true pause API; resume re-reads the current chunk.
                 speakCurrent();
             }
         });
-        stopButton = makeButton(R.string.stop, v -> { if (tts != null) tts.stop(); chunkIndex = 0; status.setText("تم الإيقاف"); });
+        stopButton = makeButton(R.string.stop, v -> {
+            if (tts != null) tts.stop();
+            chunkIndex = 0;
+            status.setText("تم الإيقاف");
+        });
         Button prev = makeButton(R.string.previous, v -> previousChunk());
         Button next = makeButton(R.string.next, v -> nextChunk());
 
@@ -122,7 +160,7 @@ public class MainActivity extends AppCompatActivity {
             public void onStopTrackingTouch(SeekBar b) {}
         });
         root.addView(speedBar);
-        setContentView(root);
+        setContentView(scroll);
     }
 
     private Button makeButton(int text, View.OnClickListener listener) {
@@ -134,19 +172,61 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void loadPdf(Uri uri) {
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
-            PDDocument doc = PDDocument.load(in);
-            PDFTextStripper stripper = new PDFTextStripper();
-            String text = stripper.getText(doc).trim();
-            doc.close();
-            if (text.isEmpty()) throw new IllegalStateException("NO_TEXT");
-            chunks = splitText(text, 3500);
-            chunkIndex = 0;
-            runOnUiThread(() -> status.setText("تم تجهيز " + chunks.length + " مقطعًا"));
-        } catch (Exception e) {
+        ParcelFileDescriptor newDescriptor = null;
+        PdfRenderer newRenderer = null;
+        try {
+            newDescriptor = getContentResolver().openFileDescriptor(uri, "r");
+            if (newDescriptor == null) throw new IllegalStateException("تعذر فتح ملف PDF");
+            newRenderer = new PdfRenderer(newDescriptor);
+
+            String[] extractedChunks = new String[0];
+            String extractionNote = "";
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 PDDocument doc = in == null ? null : PDDocument.load(in)) {
+                if (doc != null) {
+                    String text = new PDFTextStripper().getText(doc).trim();
+                    if (!text.isEmpty()) {
+                        extractedChunks = splitText(text, 3500);
+                    } else {
+                        extractionNote = getString(R.string.no_extractable_text);
+                    }
+                } else {
+                    extractionNote = getString(R.string.no_extractable_text);
+                }
+            } catch (Exception textError) {
+                extractionNote = getString(R.string.no_extractable_text);
+            }
+
+            final ParcelFileDescriptor readyDescriptor = newDescriptor;
+            final PdfRenderer readyRenderer = newRenderer;
+            final String[] readyChunks = extractedChunks;
+            final String readyNote = extractionNote;
+            newDescriptor = null;
+            newRenderer = null;
             runOnUiThread(() -> {
-                status.setText("تعذر استخراج النص. في الإصدار القادم سنضيف OCR للصفحات المصورة.");
-                Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+                closePdfRenderer();
+                pdfFileDescriptor = readyDescriptor;
+                pdfRenderer = readyRenderer;
+                chunks = readyChunks;
+                chunkIndex = 0;
+                currentPage = 0;
+                showPage(0);
+                if (readyNote.isEmpty()) {
+                    status.setText(getString(R.string.pdf_loaded, pdfRenderer.getPageCount(), chunks.length));
+                } else {
+                    status.setText(getString(R.string.pdf_loaded_no_text, pdfRenderer.getPageCount()));
+                    Toast.makeText(this, readyNote, Toast.LENGTH_LONG).show();
+                }
+            });
+        } catch (Exception e) {
+            if (newRenderer != null) newRenderer.close();
+            if (newDescriptor != null) {
+                try { newDescriptor.close(); } catch (Exception ignored) {}
+            }
+            runOnUiThread(() -> {
+                status.setText(R.string.error);
+                Toast.makeText(this, e.getMessage() == null ? getString(R.string.error) : e.getMessage(),
+                        Toast.LENGTH_LONG).show();
             });
         }
     }
@@ -166,8 +246,40 @@ public class MainActivity extends AppCompatActivity {
         return list.toArray(new String[0]);
     }
 
+    private void showPage(int index) {
+        if (pdfRenderer == null) return;
+        if (index < 0 || index >= pdfRenderer.getPageCount()) return;
+        try (PdfRenderer.Page page = pdfRenderer.openPage(index)) {
+            int targetWidth = Math.min(1200, Math.max(600, getResources().getDisplayMetrics().widthPixels));
+            int targetHeight = Math.max(1, (int) ((double) page.getHeight() * targetWidth / page.getWidth()));
+            Bitmap bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
+            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            pageImage.setImageBitmap(bitmap);
+            currentPage = index;
+            pageCounter.setText(getString(R.string.page_counter, currentPage + 1, pdfRenderer.getPageCount()));
+            previousPageButton.setEnabled(currentPage > 0);
+            nextPageButton.setEnabled(currentPage + 1 < pdfRenderer.getPageCount());
+        } catch (Exception e) {
+            Toast.makeText(this, R.string.page_render_error, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void closePdfRenderer() {
+        if (pdfRenderer != null) {
+            pdfRenderer.close();
+            pdfRenderer = null;
+        }
+        if (pdfFileDescriptor != null) {
+            try { pdfFileDescriptor.close(); } catch (Exception ignored) {}
+            pdfFileDescriptor = null;
+        }
+    }
+
     private void speakCurrent() {
-        if (tts == null || chunks.length == 0) return;
+        if (tts == null || chunks.length == 0) {
+            Toast.makeText(this, R.string.no_text_to_read, Toast.LENGTH_SHORT).show();
+            return;
+        }
         tts.speak(chunks[chunkIndex], TextToSpeech.QUEUE_FLUSH, null, "pdf_" + chunkIndex);
         status.setText("قراءة المقطع " + (chunkIndex + 1) + " من " + chunks.length);
     }
@@ -182,6 +294,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override protected void onDestroy() {
         if (tts != null) { tts.stop(); tts.shutdown(); }
+        closePdfRenderer();
         super.onDestroy();
     }
 }
