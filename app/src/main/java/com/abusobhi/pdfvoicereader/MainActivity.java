@@ -398,12 +398,12 @@ public class MainActivity extends AppCompatActivity {
             String cleaned = line.replaceAll("[\\t ]+", " ").trim();
             if (cleaned.isEmpty()) {
                 if (normalized.length() > 0 && !previousLineWasBlank) {
-                    normalized.append("\\n\\n");
+                    normalized.append("\n\n");
                 }
                 previousLineWasBlank = true;
             } else {
                 if (normalized.length() > 0
-                        && !normalized.toString().endsWith("\\n\\n")
+                        && !normalized.toString().endsWith("\n\n")
                         && normalized.charAt(normalized.length() - 1) != ' ') {
                     normalized.append(' ');
                 }
@@ -411,7 +411,7 @@ public class MainActivity extends AppCompatActivity {
                 previousLineWasBlank = false;
             }
         }
-        return normalized.toString().replaceAll(" *\\n\\n *", "\\n\\n").trim();
+        return normalized.toString().replaceAll(" *\\n\\n *", "\n\n").trim();
     }
 
     private String[] splitText(String text, int max) {
@@ -424,7 +424,7 @@ public class MainActivity extends AppCompatActivity {
                 for (int i = end; i > start + 500; i--) {
                     char c = text.charAt(i - 1);
                     if (c == '.' || c == '!' || c == '?' || c == '؟'
-                            || c == '؛' || c == ':' || c == '\\n') {
+                            || c == '؛' || c == ':' || c == '\n') {
                         boundary = i;
                         break;
                     }
