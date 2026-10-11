@@ -8,6 +8,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.speech.tts.TextToSpeech;
+import android.provider.Settings;
 import android.speech.tts.UtteranceProgressListener;
 import android.view.View;
 import android.view.GestureDetector;
@@ -44,6 +45,7 @@ public class MainActivity extends AppCompatActivity {
     private Button previousPageButton;
     private Button nextPageButton;
     private SeekBar speedBar;
+    private Button speechSettingsButton;
     private TextToSpeech tts;
     private String[] chunks = new String[0];
     private String[][] pageChunks = new String[0][];
@@ -85,10 +87,12 @@ public class MainActivity extends AppCompatActivity {
         buildUi();
         tts = new TextToSpeech(this, result -> {
             if (result == TextToSpeech.SUCCESS) {
-                int ar = tts.setLanguage(new Locale("ar"));
-                if (ar == TextToSpeech.LANG_MISSING_DATA || ar == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    tts.setLanguage(Locale.getDefault());
-                }
+                configureArabicSpeech();
+            } else {
+                runOnUiThread(() -> {
+                    status.setText("تعذر تشغيل محرك الصوت");
+                    Toast.makeText(this, "تحقق من تثبيت خدمات النطق من Google.", Toast.LENGTH_LONG).show();
+                });
             }
         });
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
@@ -193,7 +197,43 @@ public class MainActivity extends AppCompatActivity {
             public void onStopTrackingTouch(SeekBar b) {}
         });
         root.addView(speedBar);
+
+        speechSettingsButton = makeButton(android.R.string.unknownName, v -> openSpeechSettings());
+        speechSettingsButton.setText("إعدادات الصوت العربي");
+        speechSettingsButton.setContentDescription("فتح إعدادات محرك النطق والأصوات العربية");
+        root.addView(speechSettingsButton);
         setContentView(scroll);
+    }
+
+    private void configureArabicSpeech() {
+        int result = tts.setLanguage(new Locale("ar", "SA"));
+        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            result = tts.setLanguage(new Locale("ar"));
+        }
+        if (result == TextToSpeech.LANG_MISSING_DATA) {
+            status.setText("بيانات الصوت العربي غير مثبتة");
+            Toast.makeText(this, "افتح إعدادات الصوت العربي وثبّت بيانات اللغة العربية.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            status.setText("محرك الصوت الحالي لا يدعم العربية");
+            Toast.makeText(this, "اختر صوتًا عربيًا في إعدادات تحويل النص إلى كلام.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        tts.setSpeechRate(0.5f + (speedBar.getProgress() / 100f));
+        status.setText("الصوت العربي جاهز");
+    }
+
+    private void openSpeechSettings() {
+        Intent intent = new Intent("com.android.settings.TTS_SETTINGS");
+        if (intent.resolveActivity(getPackageManager()) != null) {
+            startActivity(intent);
+        } else {
+            Toast.makeText(this,
+                    "في الإعدادات ابحث عن «تحويل النص إلى كلام»، ثم اختر خدمات النطق من Google والصوت العربي.",
+                    Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
     }
 
     private void setupPageZoom() {
@@ -291,9 +331,9 @@ public class MainActivity extends AppCompatActivity {
                         PDFTextStripper stripper = new PDFTextStripper();
                         stripper.setStartPage(i + 1);
                         stripper.setEndPage(i + 1);
-                        String pageText = stripper.getText(doc).trim();
+                        String pageText = normalizeTextForSpeech(stripper.getText(doc));
                         if (!pageText.isEmpty()) {
-                            extractedPages[i] = splitText(pageText, 3500);
+                            extractedPages[i] = splitText(pageText, 1600);
                             hasText = true;
                         } else {
                             extractedPages[i] = new String[0];
@@ -348,16 +388,56 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private String normalizeTextForSpeech(String rawText) {
+        if (rawText == null || rawText.trim().isEmpty()) return "";
+        String text = rawText.replace("\r\n", "\n").replace('\r', '\n');
+        String[] lines = text.split("\n");
+        StringBuilder normalized = new StringBuilder();
+        boolean previousLineWasBlank = false;
+        for (String line : lines) {
+            String cleaned = line.replaceAll("[\\t ]+", " ").trim();
+            if (cleaned.isEmpty()) {
+                if (normalized.length() > 0 && !previousLineWasBlank) {
+                    normalized.append("\\n\\n");
+                }
+                previousLineWasBlank = true;
+            } else {
+                if (normalized.length() > 0
+                        && !normalized.toString().endsWith("\\n\\n")
+                        && normalized.charAt(normalized.length() - 1) != ' ') {
+                    normalized.append(' ');
+                }
+                normalized.append(cleaned);
+                previousLineWasBlank = false;
+            }
+        }
+        return normalized.toString().replaceAll(" *\\n\\n *", "\\n\\n").trim();
+    }
+
     private String[] splitText(String text, int max) {
         java.util.ArrayList<String> list = new java.util.ArrayList<>();
         int start = 0;
         while (start < text.length()) {
             int end = Math.min(start + max, text.length());
             if (end < text.length()) {
-                int p = text.lastIndexOf('\n', end);
-                if (p > start + 500) end = p;
+                int boundary = -1;
+                for (int i = end; i > start + 500; i--) {
+                    char c = text.charAt(i - 1);
+                    if (c == '.' || c == '!' || c == '?' || c == '؟'
+                            || c == '؛' || c == ':' || c == '\\n') {
+                        boundary = i;
+                        break;
+                    }
+                }
+                if (boundary > start + 500) {
+                    end = boundary;
+                } else {
+                    int space = text.lastIndexOf(' ', end);
+                    if (space > start + 500) end = space;
+                }
             }
-            list.add(text.substring(start, end).trim());
+            String part = text.substring(start, end).trim();
+            if (!part.isEmpty()) list.add(part);
             start = end;
         }
         return list.toArray(new String[0]);
