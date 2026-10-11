@@ -7,6 +7,15 @@
     <string name="stop">إيقاف</string>
     <string name="previous">النص السابق</string>
     <string name="next">النص التالي</string>
+    <string name="previous_page">الصفحة السابقة</string>
+    <string name="next_page">الصفحة التالية</string>
+    <string name="page_not_loaded">معاينة الصفحة ستظهر هنا</string>
+    <string name="page_counter">الصفحة %1$d من %2$d</string>
+    <string name="pdf_loaded">تم فتح الملف: %1$d صفحة، و%2$d مقطعًا للقراءة</string>
+    <string name="pdf_loaded_no_text">تم فتح الملف للمعاينة (%1$d صفحة)، لكن تعذّر استخراج نص قابل للقراءة</string>
+    <string name="no_extractable_text">لا يوجد نص قابل للاستخراج في الملف. قد يكون الملف مصوّرًا.</string>
+    <string name="no_text_to_read">لا يوجد نص متاح للقراءة الصوتية في هذا الملف.</string>
+    <string name="page_render_error">تعذرت معاينة هذه الصفحة.</string>
     <string name="speed">سرعة القراءة</string>
     <string name="no_file">لم يتم اختيار ملف</string>
     <string name="loading">جاري تجهيز الملف…</string>
