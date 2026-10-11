@@ -198,7 +198,7 @@ public class MainActivity extends AppCompatActivity {
         });
         root.addView(speedBar);
 
-        speechSettingsButton = makeButton(android.R.string.unknownName, v -> openSpeechSettings());
+        speechSettingsButton = makeButton(R.string.speed, v -> openSpeechSettings());
         speechSettingsButton.setText("إعدادات الصوت العربي");
         speechSettingsButton.setContentDescription("فتح إعدادات محرك النطق والأصوات العربية");
         root.addView(speechSettingsButton);
