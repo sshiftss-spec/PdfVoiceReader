@@ -13,6 +13,7 @@ import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -130,7 +131,12 @@ public class MainActivity extends AppCompatActivity {
         pageImage.setBackgroundColor(Color.LTGRAY);
         pageImage.setContentDescription("معاينة صفحة PDF");
         setupPageZoom();
-        root.addView(pageImage, new LinearLayout.LayoutParams(-1, -2));
+        FrameLayout pageFrame = new FrameLayout(this);
+        pageFrame.setClipChildren(true);
+        pageFrame.setClipToPadding(true);
+        pageFrame.setBackgroundColor(Color.LTGRAY);
+        pageFrame.addView(pageImage, new FrameLayout.LayoutParams(-1, -2));
+        root.addView(pageFrame, new LinearLayout.LayoutParams(-1, -2));
 
         readButton = makeButton(R.string.read_aloud, v -> speakCurrent());
         pauseButton = makeButton(R.string.resume, v -> {
