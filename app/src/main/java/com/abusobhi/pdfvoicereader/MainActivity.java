@@ -8,6 +8,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.view.View;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -47,6 +48,11 @@ public class MainActivity extends AppCompatActivity {
     private String[] chunks = new String[0];
     private String[][] pageChunks = new String[0][];
     private int chunkIndex = 0;
+    private int resumeCharIndex = 0;
+    private int utteranceBaseOffset = 0;
+    private long utteranceCounter = 0;
+    private String currentUtteranceId = "";
+    private boolean speechPaused = false;
     private int currentPage = 0;
     private Uri currentUri;
     private ParcelFileDescriptor pdfFileDescriptor;
@@ -84,6 +90,26 @@ public class MainActivity extends AppCompatActivity {
                     tts.setLanguage(Locale.getDefault());
                 }
             }
+        });
+        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+            @Override public void onStart(String utteranceId) {}
+
+            @Override public void onRangeStart(String utteranceId, int start, int end, int frame) {
+                if (utteranceId.equals(currentUtteranceId) && !speechPaused
+                        && chunks.length > 0 && chunkIndex < chunks.length) {
+                    resumeCharIndex = Math.min(chunks[chunkIndex].length(), utteranceBaseOffset + start);
+                }
+            }
+
+            @Override public void onDone(String utteranceId) {
+                if (utteranceId.equals(currentUtteranceId)) {
+                    resumeCharIndex = 0;
+                    speechPaused = false;
+                    runOnUiThread(() -> status.setText("اكتملت قراءة المقطع " + (chunkIndex + 1)));
+                }
+            }
+
+            @Override public void onError(String utteranceId) {}
         });
     }
 
@@ -138,18 +164,9 @@ public class MainActivity extends AppCompatActivity {
         pageFrame.addView(pageImage, new FrameLayout.LayoutParams(-1, -2));
         root.addView(pageFrame, new LinearLayout.LayoutParams(-1, -2));
 
-        readButton = makeButton(R.string.read_aloud, v -> speakCurrent());
-        pauseButton = makeButton(R.string.resume, v -> {
-            if (tts != null && chunks.length > 0) {
-                // Android TextToSpeech has no true pause API; resume re-reads the current chunk.
-                speakCurrent();
-            }
-        });
-        stopButton = makeButton(R.string.stop, v -> {
-            if (tts != null) tts.stop();
-            chunkIndex = 0;
-            status.setText("تم الإيقاف");
-        });
+        readButton = makeButton(R.string.read_aloud, v -> startCurrentFromBeginning());
+        pauseButton = makeButton(R.string.resume, v -> resumeCurrent());
+        stopButton = makeButton(R.string.stop, v -> pauseCurrent());
         Button prev = makeButton(R.string.previous, v -> previousChunk());
         Button next = makeButton(R.string.next, v -> nextChunk());
 
@@ -298,6 +315,9 @@ public class MainActivity extends AppCompatActivity {
             newRenderer = null;
             runOnUiThread(() -> {
                 if (tts != null) tts.stop();
+                speechPaused = false;
+                resumeCharIndex = 0;
+                currentUtteranceId = "";
                 closePdfRenderer();
                 pdfFileDescriptor = readyDescriptor;
                 pdfRenderer = readyRenderer;
@@ -346,7 +366,12 @@ public class MainActivity extends AppCompatActivity {
     private void showPage(int index) {
         if (pdfRenderer == null) return;
         if (index < 0 || index >= pdfRenderer.getPageCount()) return;
-        if (index != currentPage && tts != null) tts.stop();
+        if (index != currentPage && tts != null) {
+            tts.stop();
+            speechPaused = false;
+            resumeCharIndex = 0;
+            currentUtteranceId = "";
+        }
         try (PdfRenderer.Page page = pdfRenderer.openPage(index)) {
             int targetWidth = Math.min(1200, Math.max(600, getResources().getDisplayMetrics().widthPixels));
             int targetHeight = Math.max(1, (int) ((double) page.getHeight() * targetWidth / page.getWidth()));
@@ -357,6 +382,8 @@ public class MainActivity extends AppCompatActivity {
             currentPage = index;
             chunks = index < pageChunks.length ? pageChunks[index] : new String[0];
             chunkIndex = 0;
+            resumeCharIndex = 0;
+            speechPaused = false;
             pageCounter.setText(getString(R.string.page_counter, currentPage + 1, pdfRenderer.getPageCount()));
             previousPageButton.setEnabled(currentPage > 0);
             nextPageButton.setEnabled(currentPage + 1 < pdfRenderer.getPageCount());
@@ -376,21 +403,65 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void speakCurrent() {
+    private void startCurrentFromBeginning() {
+        resumeCharIndex = 0;
+        speechPaused = false;
+        speakRemaining();
+    }
+
+    private void pauseCurrent() {
+        if (tts == null || chunks.length == 0) return;
+        speechPaused = true;
+        tts.stop();
+        status.setText("تم الإيقاف مؤقتًا");
+    }
+
+    private void resumeCurrent() {
         if (tts == null || chunks.length == 0) {
             Toast.makeText(this, R.string.no_text_to_read, Toast.LENGTH_SHORT).show();
             return;
         }
-        tts.speak(chunks[chunkIndex], TextToSpeech.QUEUE_FLUSH, null, "pdf_" + chunkIndex);
+        if (!speechPaused && tts.isSpeaking()) return;
+        speechPaused = false;
+        speakRemaining();
+    }
+
+    private void speakRemaining() {
+        if (tts == null || chunks.length == 0 || chunkIndex < 0 || chunkIndex >= chunks.length) {
+            Toast.makeText(this, R.string.no_text_to_read, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String currentText = chunks[chunkIndex];
+        if (resumeCharIndex >= currentText.length()) resumeCharIndex = 0;
+        utteranceBaseOffset = resumeCharIndex;
+        String remainingText = currentText.substring(resumeCharIndex);
+        if (remainingText.trim().isEmpty()) {
+            resumeCharIndex = 0;
+            return;
+        }
+        currentUtteranceId = "pdf_" + chunkIndex + "_" + (++utteranceCounter);
+        tts.speak(remainingText, TextToSpeech.QUEUE_FLUSH, null, currentUtteranceId);
         status.setText("قراءة المقطع " + (chunkIndex + 1) + " من " + chunks.length);
     }
 
     private void nextChunk() {
-        if (chunkIndex + 1 < chunks.length) { chunkIndex++; speakCurrent(); }
+        if (chunkIndex + 1 < chunks.length) {
+            if (tts != null) tts.stop();
+            chunkIndex++;
+            resumeCharIndex = 0;
+            speechPaused = false;
+            startCurrentFromBeginning();
+        }
     }
 
     private void previousChunk() {
-        if (chunkIndex > 0) { chunkIndex--; speakCurrent(); }
+        if (chunkIndex > 0) {
+            if (tts != null) tts.stop();
+            chunkIndex--;
+            resumeCharIndex = 0;
+            speechPaused = false;
+            startCurrentFromBeginning();
+        }
     }
 
     @Override protected void onDestroy() {
