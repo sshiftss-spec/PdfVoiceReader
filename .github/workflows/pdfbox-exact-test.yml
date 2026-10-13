@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - pdfbox-exact-test
+      - pdfbox-exact-test-5e-mark-centering
     paths:
       - 'pdfbox_exact_test/**'
       - '.github/workflows/pdfbox-exact-test.yml'
