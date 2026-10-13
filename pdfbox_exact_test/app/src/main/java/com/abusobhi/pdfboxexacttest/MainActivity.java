@@ -35,7 +35,7 @@ public class MainActivity extends Activity {
         });
         root.addView(choose, new LinearLayout.LayoutParams(-1, -2));
         TextView note = new TextView(this);
-        note.setText("يستخرج هذا الاختبار الصفحة الرابعة باستخدام pdfbox-android 2.0.27.0 فقط. لا يطبّق أي إصلاح للنص.");
+        note.setText("اختبار معزول لـ PDFBox Android 2.0.27.0: يقارن الاستخراج الخام بترتيب المواضع، ثم ترتيب المواضع مع تعديل حساسية المسافات. لا يغيّر التطبيق الأصلي ولا يصلح الكلمات تلقائيًا.");
         root.addView(note, new LinearLayout.LayoutParams(-1, -2));
         ScrollView scroll = new ScrollView(this);
         output = new TextView(this);
@@ -51,23 +51,37 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != PICK_PDF || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
-        output.setText("جارٍ استخراج الصفحة الرابعة بإصدار PDFBox المطابق...");
+        output.setText("جارٍ مقارنة ثلاث طرق استخراج للصفحة الرابعة...");
         new Thread(() -> {
             String result;
             try (InputStream in = getContentResolver().openInputStream(uri);
                  PDDocument doc = in == null ? null : PDDocument.load(in)) {
                 if (doc == null) throw new IllegalStateException("تعذر فتح الملف");
                 if (doc.getNumberOfPages() < 4) throw new IllegalStateException("الملف يحتوي على أقل من أربع صفحات");
-                PDFTextStripper stripper = new PDFTextStripper();
-                stripper.setStartPage(4);
-                stripper.setEndPage(4);
-                result = "PDFBox Android version: 2.0.27.0\nPages: " + doc.getNumberOfPages()
-                        + "\n--- RAW PAGE 4 ---\n" + stripper.getText(doc);
+                StringBuilder all = new StringBuilder();
+                all.append("PDFBox Android version: 2.0.27.0\nPages: ")
+                   .append(doc.getNumberOfPages()).append("\n");
+                all.append("\n========== 1: RAW DEFAULT ==========\n");
+                all.append(extract(doc, false, 0.5f));
+                all.append("\n\n========== 2: SORT BY POSITION ==========\n");
+                all.append(extract(doc, true, 0.5f));
+                all.append("\n\n========== 3: SORT + LOWER SPACING TOLERANCE (0.2) ==========\n");
+                all.append(extract(doc, true, 0.2f));
+                result = all.toString();
             } catch (Throwable e) {
                 result = "TEST FAILED\n" + e.getClass().getName() + ": " + e.getMessage();
             }
             final String shown = result;
             runOnUiThread(() -> output.setText(shown));
         }).start();
+    }
+
+    private String extract(PDDocument doc, boolean sortByPosition, float spacingTolerance) throws Exception {
+        PDFTextStripper stripper = new PDFTextStripper();
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(sortByPosition);
+        stripper.setSpacingTolerance(spacingTolerance);
+        return stripper.getText(doc);
     }
 }
