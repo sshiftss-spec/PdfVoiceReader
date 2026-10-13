@@ -137,6 +137,9 @@ public class MainActivity extends Activity {
                 all.append("\n========== 5D: POSITION RTL, WHOLE LINE ==========\n");
                 all.append(extractPositionRtl(doc, 0.35f));
 
+                all.append("\n========== 5E: CENTER-BASED DIACRITIC ATTACHMENT ==========\n");
+                all.append(extractPositionRtlCenterMarks(doc, 0.35f));
+
                 result = all.toString();
 
             } catch (Throwable e) {
@@ -175,6 +178,17 @@ public class MainActivity extends Activity {
         return stripper.result();
     }
 
+    private String extractPositionRtlCenterMarks(
+            PDDocument doc, float gapFactor) throws Exception {
+        PositionRtlStripper stripper =
+                new PositionRtlStripper(gapFactor, true);
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.result();
+    }
+
     private String diagnose(PDDocument doc) throws Exception {
         DiagnosticStripper stripper = new DiagnosticStripper();
         stripper.setStartPage(4);
@@ -193,10 +207,17 @@ public class MainActivity extends Activity {
         private final StringBuilder out = new StringBuilder();
         private final List<TextPosition> linePositions = new ArrayList<>();
         private final float gapFactor;
+        private final boolean centerBasedMarks;
 
         PositionRtlStripper(float gapFactor) throws IOException {
+            this(gapFactor, false);
+        }
+
+        PositionRtlStripper(
+                float gapFactor, boolean centerBasedMarks) throws IOException {
             super();
             this.gapFactor = gapFactor;
+            this.centerBasedMarks = centerBasedMarks;
         }
 
         @Override
@@ -262,9 +283,18 @@ public class MainActivity extends Activity {
                 Glyph best = null;
                 float bestDistance = Float.MAX_VALUE;
                 for (Glyph g : glyphs) {
-                    float right = g.x + g.width;
-                    float distance = mx < g.x ? g.x - mx
-                            : (mx > right ? mx - right : 0f);
+                    float distance;
+                    if (centerBasedMarks) {
+                        // A mark can lie inside more than one overlapping glyph
+                        // box. Edge-distance then ties at zero and picks the
+                        // first glyph, so use the nearest glyph center instead.
+                        float center = g.x + (g.width / 2f);
+                        distance = Math.abs(mx - center);
+                    } else {
+                        float right = g.x + g.width;
+                        distance = mx < g.x ? g.x - mx
+                                : (mx > right ? mx - right : 0f);
+                    }
                     if (distance < bestDistance) {
                         bestDistance = distance;
                         best = g;
