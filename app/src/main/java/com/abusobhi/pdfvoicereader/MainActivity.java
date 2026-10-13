@@ -429,7 +429,7 @@ public class MainActivity extends AppCompatActivity {
                 if (text != null && !text.isEmpty()) {
                     out.append(text);
                 }
-                out.append('\\n');
+                out.append('\n');
                 return;
             }
 
@@ -464,7 +464,7 @@ public class MainActivity extends AppCompatActivity {
                 previousWidth = width;
                 haveGlyph = true;
             }
-            out.append('\\n');
+            out.append('\n');
         }
 
         String result() {
