@@ -343,7 +343,7 @@ public class MainActivity extends AppCompatActivity {
                     extractedPages = new String[doc.getNumberOfPages()][];
                     boolean hasText = false;
                     for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                        PositionRtlStripper stripper = new PositionRtlStripper(0.25f);
+                        PositionRtlStripper stripper = new PositionRtlStripper();
                         stripper.setStartPage(i + 1);
                         stripper.setEndPage(i + 1);
                         stripper.setSortByPosition(true);
@@ -407,18 +407,20 @@ public class MainActivity extends AppCompatActivity {
 
 
     /*
-     * Experimental Arabic PDF reconstruction based on the best current test
-     * (5A): order each PDFTextStripper text fragment by descending X position,
-     * then infer spaces from visible gaps. This is intentionally isolated on
-     * the arabic-extraction-trial branch until real-book testing is satisfactory.
+     * Experimental Arabic PDF reconstruction, revision 2.
+     *
+     * PDFTextStripper calls writeString once per detected word, not once per
+     * complete line. Therefore, do not infer spaces between individual glyphs
+     * and do not insert a line break after every writeString call. Keep the
+     * detected word boundaries, reorder glyph positions inside each word for
+     * RTL Arabic, and let PDFTextStripper's word/line separators delimit text.
      */
     private static class PositionRtlStripper extends PDFTextStripper {
         private final StringBuilder out = new StringBuilder();
-        private final float gapFactor;
 
-        PositionRtlStripper(float gapFactor) throws IOException {
+        PositionRtlStripper() throws IOException {
             super();
-            this.gapFactor = gapFactor;
+            setSortByPosition(true);
         }
 
         @Override
@@ -426,10 +428,7 @@ public class MainActivity extends AppCompatActivity {
                 String text, List<TextPosition> textPositions)
                 throws IOException {
             if (textPositions == null || textPositions.isEmpty()) {
-                if (text != null && !text.isEmpty()) {
-                    out.append(text);
-                }
-                out.append('\n');
+                if (text != null) out.append(text);
                 return;
             }
 
@@ -437,34 +436,30 @@ public class MainActivity extends AppCompatActivity {
             Collections.sort(positions,
                     (a, b) -> Float.compare(b.getXDirAdj(), a.getXDirAdj()));
 
-            float previousX = Float.NaN;
-            float previousWidth = 0f;
-            boolean haveGlyph = false;
-
             for (TextPosition p : positions) {
-                String u = p.getUnicode();
-                if (u == null || u.isEmpty() || u.trim().isEmpty()) {
-                    continue;
+                String unicode = p.getUnicode();
+                if (unicode != null && !unicode.isEmpty()) {
+                    out.append(unicode);
                 }
-
-                float x = p.getXDirAdj();
-                float width = Math.max(0f, p.getWidthDirAdj());
-
-                if (haveGlyph) {
-                    float gap = previousX - (x + width);
-                    float referenceWidth = Math.max(
-                            1.0f, Math.min(previousWidth, width));
-                    if (gap > Math.max(1.5f, referenceWidth * gapFactor)) {
-                        out.append(' ');
-                    }
-                }
-
-                out.append(u);
-                previousX = x;
-                previousWidth = width;
-                haveGlyph = true;
             }
-            out.append('\n');
+        }
+
+        @Override
+        protected void writeWordSeparator() throws IOException {
+            if (out.length() > 0) {
+                char last = out.charAt(out.length() - 1);
+                if (last != ' ' && last != '\\n') out.append(' ');
+            }
+        }
+
+        @Override
+        protected void writeLineSeparator() throws IOException {
+            while (out.length() > 0 && out.charAt(out.length() - 1) == ' ') {
+                out.setLength(out.length() - 1);
+            }
+            if (out.length() > 0 && out.charAt(out.length() - 1) != '\\n') {
+                out.append('\\n');
+            }
         }
 
         String result() {
