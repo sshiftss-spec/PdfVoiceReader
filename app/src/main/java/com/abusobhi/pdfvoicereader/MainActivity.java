@@ -448,7 +448,7 @@ public class MainActivity extends AppCompatActivity {
         protected void writeWordSeparator() throws IOException {
             if (out.length() > 0) {
                 char last = out.charAt(out.length() - 1);
-                if (last != ' ' && last != '\\n') out.append(' ');
+                if (last != ' ' && last != '\n') out.append(' ');
             }
         }
 
@@ -457,8 +457,8 @@ public class MainActivity extends AppCompatActivity {
             while (out.length() > 0 && out.charAt(out.length() - 1) == ' ') {
                 out.setLength(out.length() - 1);
             }
-            if (out.length() > 0 && out.charAt(out.length() - 1) != '\\n') {
-                out.append('\\n');
+            if (out.length() > 0 && out.charAt(out.length() - 1) != '\n') {
+                out.append('\n');
             }
         }
 
@@ -490,7 +490,7 @@ public class MainActivity extends AppCompatActivity {
                 previousLineWasBlank = false;
             }
         }
-        return normalized.toString().replaceAll(" *\\n\\n *", "\n\n").trim();
+        return normalized.toString().replaceAll(" *\n\n *", "\n\n").trim();
     }
 
     private String[] splitText(String text, int max) {
