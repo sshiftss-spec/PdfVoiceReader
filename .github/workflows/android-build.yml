@@ -2,7 +2,7 @@ name: Android Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, arabic-extraction-trial]
   pull_request:
     branches: [main]
   workflow_dispatch:
