@@ -17,6 +17,9 @@ import com.tom_roush.pdfbox.text.TextPosition;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
@@ -119,6 +122,18 @@ public class MainActivity extends Activity {
                         "\n========== 4: CHARACTER DIAGNOSTICS ==========\n");
                 all.append(diagnose(doc));
 
+                all.append(
+                        "\n========== 5A: POSITION RTL, GAP 0.25 ==========\n");
+                all.append(extractPositionRtl(doc, 0.25f));
+
+                all.append(
+                        "\n========== 5B: POSITION RTL, GAP 0.45 ==========\n");
+                all.append(extractPositionRtl(doc, 0.45f));
+
+                all.append(
+                        "\n========== 5C: POSITION RTL, GAP 0.70 ==========\n");
+                all.append(extractPositionRtl(doc, 0.70f));
+
                 result = all.toString();
 
             } catch (Throwable e) {
@@ -147,6 +162,16 @@ public class MainActivity extends Activity {
         return stripper.getText(doc);
     }
 
+    private String extractPositionRtl(
+            PDDocument doc, float gapFactor) throws Exception {
+        PositionRtlStripper stripper = new PositionRtlStripper(gapFactor);
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.result();
+    }
+
     private String diagnose(PDDocument doc) throws Exception {
         DiagnosticStripper stripper = new DiagnosticStripper();
         stripper.setStartPage(4);
@@ -154,6 +179,73 @@ public class MainActivity extends Activity {
         stripper.setSortByPosition(false);
         stripper.getText(doc);
         return stripper.report();
+    }
+
+    /*
+     * Experimental only: reconstruct each PDFBox line by descending X.
+     * This does not alter the production reader and must be checked against
+     * the reference text before being considered useful.
+     */
+    private static class PositionRtlStripper extends PDFTextStripper {
+        private final StringBuilder out = new StringBuilder();
+        private final float gapFactor;
+
+        PositionRtlStripper(float gapFactor) throws IOException {
+            super();
+            this.gapFactor = gapFactor;
+        }
+
+        @Override
+        protected void writeString(
+                String text, List<TextPosition> textPositions)
+                throws IOException {
+            if (textPositions == null || textPositions.isEmpty()) {
+                if (text != null && !text.isEmpty()) {
+                    out.append(text);
+                }
+                out.append('\n');
+                return;
+            }
+
+            List<TextPosition> positions =
+                    new ArrayList<>(textPositions);
+            Collections.sort(positions,
+                    (a, b) -> Float.compare(
+                            b.getXDirAdj(), a.getXDirAdj()));
+
+            float previousX = Float.NaN;
+            float previousWidth = 0f;
+            boolean haveGlyph = false;
+
+            for (TextPosition p : positions) {
+                String u = p.getUnicode();
+                if (u == null || u.isEmpty() || u.trim().isEmpty()) {
+                    continue;
+                }
+
+                float x = p.getXDirAdj();
+                float width = Math.max(0f, p.getWidthDirAdj());
+
+                if (haveGlyph) {
+                    float gap = previousX - (x + width);
+                    float referenceWidth = Math.max(
+                            1.0f, Math.min(previousWidth, width));
+                    if (gap > Math.max(1.5f, referenceWidth * gapFactor)) {
+                        out.append(' ');
+                    }
+                }
+
+                out.append(u);
+                previousX = x;
+                previousWidth = width;
+                haveGlyph = true;
+            }
+            out.append('\n');
+        }
+
+        String result() {
+            return out.toString();
+        }
     }
 
     private static class DiagnosticStripper
