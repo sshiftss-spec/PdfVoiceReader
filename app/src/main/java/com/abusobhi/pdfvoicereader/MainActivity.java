@@ -30,8 +30,13 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
 import com.tom_roush.pdfbox.text.PDFTextStripper;
+import com.tom_roush.pdfbox.text.TextPosition;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
@@ -338,10 +343,12 @@ public class MainActivity extends AppCompatActivity {
                     extractedPages = new String[doc.getNumberOfPages()][];
                     boolean hasText = false;
                     for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                        PDFTextStripper stripper = new PDFTextStripper();
+                        PositionRtlStripper stripper = new PositionRtlStripper(0.25f);
                         stripper.setStartPage(i + 1);
                         stripper.setEndPage(i + 1);
-                        String pageText = normalizeTextForSpeech(stripper.getText(doc));
+                        stripper.setSortByPosition(true);
+                        stripper.getText(doc);
+                        String pageText = normalizeTextForSpeech(stripper.result());
                         if (!pageText.isEmpty()) {
                             extractedPages[i] = splitText(pageText, 1600);
                             hasText = true;
@@ -395,6 +402,73 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, e.getMessage() == null ? getString(R.string.error) : e.getMessage(),
                         Toast.LENGTH_LONG).show();
             });
+        }
+    }
+
+
+    /*
+     * Experimental Arabic PDF reconstruction based on the best current test
+     * (5A): order each PDFTextStripper text fragment by descending X position,
+     * then infer spaces from visible gaps. This is intentionally isolated on
+     * the arabic-extraction-trial branch until real-book testing is satisfactory.
+     */
+    private static class PositionRtlStripper extends PDFTextStripper {
+        private final StringBuilder out = new StringBuilder();
+        private final float gapFactor;
+
+        PositionRtlStripper(float gapFactor) throws IOException {
+            super();
+            this.gapFactor = gapFactor;
+        }
+
+        @Override
+        protected void writeString(
+                String text, List<TextPosition> textPositions)
+                throws IOException {
+            if (textPositions == null || textPositions.isEmpty()) {
+                if (text != null && !text.isEmpty()) {
+                    out.append(text);
+                }
+                out.append('\\n');
+                return;
+            }
+
+            List<TextPosition> positions = new ArrayList<>(textPositions);
+            Collections.sort(positions,
+                    (a, b) -> Float.compare(b.getXDirAdj(), a.getXDirAdj()));
+
+            float previousX = Float.NaN;
+            float previousWidth = 0f;
+            boolean haveGlyph = false;
+
+            for (TextPosition p : positions) {
+                String u = p.getUnicode();
+                if (u == null || u.isEmpty() || u.trim().isEmpty()) {
+                    continue;
+                }
+
+                float x = p.getXDirAdj();
+                float width = Math.max(0f, p.getWidthDirAdj());
+
+                if (haveGlyph) {
+                    float gap = previousX - (x + width);
+                    float referenceWidth = Math.max(
+                            1.0f, Math.min(previousWidth, width));
+                    if (gap > Math.max(1.5f, referenceWidth * gapFactor)) {
+                        out.append(' ');
+                    }
+                }
+
+                out.append(u);
+                previousX = x;
+                previousWidth = width;
+                haveGlyph = true;
+            }
+            out.append('\\n');
+        }
+
+        String result() {
+            return out.toString();
         }
     }
 
