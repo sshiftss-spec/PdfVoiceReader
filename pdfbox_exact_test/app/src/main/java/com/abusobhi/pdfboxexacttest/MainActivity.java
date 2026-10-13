@@ -134,6 +134,9 @@ public class MainActivity extends Activity {
                         "\n========== 5C: POSITION RTL, GAP 0.70 ==========\n");
                 all.append(extractPositionRtl(doc, 0.70f));
 
+                all.append("\n========== 5D: POSITION RTL, WHOLE LINE ==========\n");
+                all.append(extractPositionRtl(doc, 0.35f));
+
                 result = all.toString();
 
             } catch (Throwable e) {
@@ -182,12 +185,13 @@ public class MainActivity extends Activity {
     }
 
     /*
-     * Experimental only: reconstruct each PDFBox line by descending X.
-     * This does not alter the production reader and must be checked against
-     * the reference text before being considered useful.
+     * Experimental only: collect every TextPosition in a complete PDFBox line,
+     * then reconstruct that line by descending X. Sorting each writeString()
+     * fragment separately incorrectly split one visual line into many lines.
      */
     private static class PositionRtlStripper extends PDFTextStripper {
         private final StringBuilder out = new StringBuilder();
+        private final List<TextPosition> linePositions = new ArrayList<>();
         private final float gapFactor;
 
         PositionRtlStripper(float gapFactor) throws IOException {
@@ -199,51 +203,126 @@ public class MainActivity extends Activity {
         protected void writeString(
                 String text, List<TextPosition> textPositions)
                 throws IOException {
-            if (textPositions == null || textPositions.isEmpty()) {
-                if (text != null && !text.isEmpty()) {
-                    out.append(text);
-                }
-                out.append('\n');
+            if (textPositions != null && !textPositions.isEmpty()) {
+                linePositions.addAll(textPositions);
+            }
+        }
+
+        @Override
+        protected void writeLineSeparator() throws IOException {
+            flushLine();
+            out.append('\n');
+        }
+
+        @Override
+        protected void writePageEnd() throws IOException {
+            flushLine();
+            super.writePageEnd();
+        }
+
+        private void flushLine() {
+            if (linePositions.isEmpty()) {
                 return;
             }
 
-            List<TextPosition> positions =
-                    new ArrayList<>(textPositions);
-            Collections.sort(positions,
-                    (a, b) -> Float.compare(
-                            b.getXDirAdj(), a.getXDirAdj()));
+            class Glyph {
+                float x;
+                float width;
+                String unicode;
+
+                Glyph(TextPosition p) {
+                    x = p.getXDirAdj();
+                    width = Math.max(0f, p.getWidthDirAdj());
+                    unicode = p.getUnicode();
+                }
+            }
+
+            List<Glyph> glyphs = new ArrayList<>();
+            List<TextPosition> marks = new ArrayList<>();
+
+            for (TextPosition p : linePositions) {
+                String u = p.getUnicode();
+                if (u == null || u.isEmpty() || u.trim().isEmpty()) {
+                    continue;
+                }
+                if (isOnlyCombiningMarks(u)) {
+                    marks.add(p);
+                } else {
+                    glyphs.add(new Glyph(p));
+                }
+            }
+
+            // Attach zero-width Arabic diacritics to their nearest glyph.
+            for (TextPosition mark : marks) {
+                if (glyphs.isEmpty()) {
+                    glyphs.add(new Glyph(mark));
+                    continue;
+                }
+                float mx = mark.getXDirAdj();
+                Glyph best = null;
+                float bestDistance = Float.MAX_VALUE;
+                for (Glyph g : glyphs) {
+                    float right = g.x + g.width;
+                    float distance = mx < g.x ? g.x - mx
+                            : (mx > right ? mx - right : 0f);
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        best = g;
+                    }
+                }
+                if (best != null) {
+                    best.unicode += mark.getUnicode();
+                }
+            }
+
+            Collections.sort(glyphs,
+                    (a, b) -> Float.compare(b.x, a.x));
 
             float previousX = Float.NaN;
             float previousWidth = 0f;
             boolean haveGlyph = false;
 
-            for (TextPosition p : positions) {
-                String u = p.getUnicode();
-                if (u == null || u.isEmpty() || u.trim().isEmpty()) {
+            for (Glyph g : glyphs) {
+                if (g.unicode == null || g.unicode.isEmpty()) {
                     continue;
                 }
-
-                float x = p.getXDirAdj();
-                float width = Math.max(0f, p.getWidthDirAdj());
-
                 if (haveGlyph) {
-                    float gap = previousX - (x + width);
+                    float gap = previousX - (g.x + g.width);
                     float referenceWidth = Math.max(
-                            1.0f, Math.min(previousWidth, width));
-                    if (gap > Math.max(1.5f, referenceWidth * gapFactor)) {
+                            1.0f, Math.min(previousWidth, g.width));
+                    if (gap > Math.max(2.0f, referenceWidth * gapFactor)) {
                         out.append(' ');
                     }
                 }
-
-                out.append(u);
-                previousX = x;
-                previousWidth = width;
+                out.append(g.unicode);
+                previousX = g.x;
+                previousWidth = g.width;
                 haveGlyph = true;
             }
-            out.append('\n');
+            linePositions.clear();
+        }
+
+        private static boolean isOnlyCombiningMarks(String value) {
+            if (value == null || value.isEmpty()) {
+                return false;
+            }
+            boolean foundMark = false;
+            for (int i = 0; i < value.length();) {
+                int cp = value.codePointAt(i);
+                int type = Character.getType(cp);
+                if (type != Character.NON_SPACING_MARK
+                        && type != Character.COMBINING_SPACING_MARK
+                        && type != Character.ENCLOSING_MARK) {
+                    return false;
+                }
+                foundMark = true;
+                i += Character.charCount(cp);
+            }
+            return foundMark;
         }
 
         String result() {
+            flushLine();
             return out.toString();
         }
     }
