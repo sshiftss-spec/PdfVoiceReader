@@ -386,7 +386,6 @@ public class MainActivity extends Activity {
             float previousWidth = 0f;
             float previousSpaceWidth = -1f;
             float previousAverageCharWidth = -1f;
-            int previousCharCount = 1;
             boolean haveGlyph = false;
             boolean previousWasSpace = false;
 
@@ -433,7 +432,6 @@ public class MainActivity extends Activity {
                 previousX = g.x;
                 previousWidth = g.width;
                 previousWasSpace = g.unicode.trim().isEmpty();
-                previousCharCount = Math.max(1, g.charCount);
                 haveGlyph = true;
             }
             linePositions.clear();
