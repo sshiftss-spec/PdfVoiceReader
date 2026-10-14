@@ -104,65 +104,10 @@ public class MainActivity extends Activity {
                 }
 
                 StringBuilder all = new StringBuilder();
-                all.append("PDFBox Android: 2.0.27.0\n")
-                   .append("Pages: ")
-                   .append(doc.getNumberOfPages())
-                   .append("\n");
-
-                all.append(
-                        "\n========== 1: RAW DEFAULT ==========\n");
-                all.append(extract(doc, false, 0.5f));
-
-                all.append(
-                        "\n========== 2: SORT BY POSITION ==========\n");
-                all.append(extract(doc, true, 0.5f));
-
-                all.append(
-                        "\n========== 3: SORT + TOLERANCE 0.2 ==========\n");
-                all.append(extract(doc, true, 0.2f));
-
-                all.append(
-                        "\n========== 4: CHARACTER DIAGNOSTICS ==========\n");
-                all.append(diagnose(doc));
-
-                all.append(
-                        "\n========== 5A: POSITION RTL, GAP 0.25 ==========\n");
-                all.append(extractPositionRtl(doc, 0.25f));
-
-                all.append(
-                        "\n========== 5B: POSITION RTL, GAP 0.45 ==========\n");
-                all.append(extractPositionRtl(doc, 0.45f));
-
-                all.append(
-                        "\n========== 5C: POSITION RTL, GAP 0.70 ==========\n");
-                all.append(extractPositionRtl(doc, 0.70f));
-
-                all.append("\n========== 5D: POSITION RTL, WHOLE LINE ==========\n");
-                all.append(extractPositionRtl(doc, 0.35f));
-
-                all.append("\n========== 5E: CENTER-BASED DIACRITIC ATTACHMENT ==========\n");
-                all.append(extractPositionRtlCenterMarks(doc, 0.35f));
-
-                all.append("\n========== 5F: POSITION RTL, EXPLICIT SPACES ONLY ==========\n");
-                all.append(extractPositionRtlExplicitSpaces(doc));
-
-                all.append("\n========== 5G: CENTER MARKS + PDFBOX-LIKE GAP THRESHOLD ==========\n");
-                all.append(extractPositionRtlPdfBoxLike(doc));
-
-                all.append("\n========== 5H: CENTER MARKS + EXPLICIT SPACES ONLY ==========\n");
-                all.append(extractPositionRtlExplicitSpacesCenterMarks(doc));
-
-                all.append("\n========== 6: ADJACENT GLYPH GAP DIAGNOSTICS ==========\n");
-                all.append(diagnoseGaps(doc));
-
-                all.append("\n========== 7: PDFBOX-STYLE RTL THRESHOLD DISAGREEMENTS ==========\n");
-                all.append(diagnosePdfBoxThreshold(doc));
-
-                all.append("\n========== 8: PDFBOX DEFAULT WORD-BOUNDARY CHECK ==========\n");
-                all.append(diagnosePdfBoxWordBoundaries(doc));
-
-                all.append("\n========== 9: FOOTER CALLBACK / LINE DIAGNOSTICS ==========\n");
-                all.append(diagnoseFooterCallbacks(doc));
+                all.append("PDFBox Android: 2.0.27.0\\n")
+                   .append("Pages: ").append(doc.getNumberOfPages()).append("\\n\\n")
+                   .append("========== FINAL TEXT: EXPLICIT SPACES + FOOTER GAP FIX ==========\\n");
+                all.append(extractFinal(doc));
 
                 result = all.toString();
 
@@ -176,6 +121,16 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> output.setText(shown));
 
         }).start();
+    }
+
+    private String extractFinal(PDDocument doc) throws Exception {
+        PositionRtlStripper stripper =
+                new PositionRtlStripper(0.35f, false, true, false, true);
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.result();
     }
 
     private String extract(
@@ -276,6 +231,7 @@ public class MainActivity extends Activity {
         private final boolean centerBasedMarks;
         private final boolean explicitSpacesOnly;
         private final boolean pdfBoxLikeSpacing;
+        private final boolean footerGapSpacing;
 
         PositionRtlStripper(float gapFactor) throws IOException {
             this(gapFactor, false, false, false);
@@ -296,11 +252,20 @@ public class MainActivity extends Activity {
                 float gapFactor, boolean centerBasedMarks,
                 boolean explicitSpacesOnly, boolean pdfBoxLikeSpacing)
                 throws IOException {
+            this(gapFactor, centerBasedMarks, explicitSpacesOnly,
+                    pdfBoxLikeSpacing, false);
+        }
+
+        PositionRtlStripper(
+                float gapFactor, boolean centerBasedMarks,
+                boolean explicitSpacesOnly, boolean pdfBoxLikeSpacing,
+                boolean footerGapSpacing) throws IOException {
             super();
             this.gapFactor = gapFactor;
             this.centerBasedMarks = centerBasedMarks;
             this.explicitSpacesOnly = explicitSpacesOnly;
             this.pdfBoxLikeSpacing = pdfBoxLikeSpacing;
+            this.footerGapSpacing = footerGapSpacing;
         }
 
         @Override
@@ -348,6 +313,16 @@ public class MainActivity extends Activity {
                     if (charCount <= 0) {
                         charCount = value == null || value.isEmpty() ? 1
                                 : Math.max(1, value.codePointCount(0, value.length()));
+                    }
+                }
+            }
+
+            boolean footerLine = false;
+            if (footerGapSpacing) {
+                for (TextPosition p : linePositions) {
+                    if (p.getYDirAdj() > 900f) {
+                        footerLine = true;
+                        break;
                     }
                 }
             }
@@ -419,12 +394,17 @@ public class MainActivity extends Activity {
                 if (g.unicode == null || g.unicode.isEmpty()) {
                     continue;
                 }
-                if (haveGlyph && !explicitSpacesOnly
+                if (haveGlyph
+                        && (!explicitSpacesOnly || (footerGapSpacing && footerLine))
                         && !previousWasSpace
                         && !g.unicode.trim().isEmpty()) {
                     float gap = previousX - (g.x + g.width);
                     boolean addSpace;
-                    if (pdfBoxLikeSpacing) {
+                    if (footerGapSpacing && footerLine) {
+                        // Only the footer is reconstructed from widely separated
+                        // PDF text clusters; the hadith body keeps explicit spaces.
+                        addSpace = gap > 20.0f;
+                    } else if (pdfBoxLikeSpacing) {
                         float currentAverageCharWidth =
                                 g.width / Math.max(1, g.charCount);
                         float averageCharWidth = previousAverageCharWidth < 0f
