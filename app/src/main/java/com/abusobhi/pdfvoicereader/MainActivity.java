@@ -495,7 +495,7 @@ public class MainActivity extends AppCompatActivity {
             if (!tessdata.exists() && !tessdata.mkdirs()) throw new IllegalStateException("تعذر إنشاء مجلد بيانات OCR");
             File model = new File(tessdata, "ara.traineddata");
             if (!model.isFile() || model.length() < 1000000) {
-                status.setText("جارٍ تجهيز بيانات OCR العربية لأول مرة…");
+                runOnUiThread(() -> status.setText("جارٍ تجهيز بيانات OCR العربية لأول مرة…"));
                 HttpURLConnection connection = (HttpURLConnection) new URL("https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata").openConnection();
                 connection.setConnectTimeout(20000); connection.setReadTimeout(45000);
                 try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(model)) {
@@ -508,7 +508,7 @@ public class MainActivity extends AppCompatActivity {
             if (!api.init(dataDir.getAbsolutePath(), "ara")) {
                 api.end(); throw new IllegalStateException("تعذر تهيئة محرك OCR باللغة العربية");
             }
-            api.setPageSegMode(TessBaseAPI.PageSegMode.AUTO);
+            api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
             tessBaseAPI = api; ocrReady = true;
         }
     }
