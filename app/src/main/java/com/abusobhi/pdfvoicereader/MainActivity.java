@@ -2,6 +2,11 @@ package com.abusobhi.pdfvoicereader;
 
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Color;
 import android.graphics.BitmapFactory;
 import android.provider.MediaStore;
@@ -485,14 +490,89 @@ public class MainActivity extends AppCompatActivity {
         runOnUiThread(() -> status.setText("تم تجهيز OCR العربي؛ جارٍ استخراج النص من الصورة..."));
         synchronized (this) {
             if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
+
+            // First pass keeps the original pixels. The second pass uses a
+            // lightly enhanced, resized copy to recover small or faint Arabic text.
+            String originalText = recognizeBitmap(bitmap);
+            Bitmap enhanced = prepareOcrBitmap(bitmap);
             try {
-                tessBaseAPI.setImage(bitmap);
-                String result = tessBaseAPI.getUTF8Text();
-                return result == null ? "" : result;
+                String enhancedText = recognizeBitmap(enhanced);
+                return ocrTextScore(enhancedText) > ocrTextScore(originalText)
+                        ? enhancedText : originalText;
             } finally {
-                tessBaseAPI.clear();
+                if (enhanced != bitmap && !enhanced.isRecycled()) enhanced.recycle();
             }
         }
+    }
+
+    private String recognizeBitmap(Bitmap bitmap) {
+        try {
+            tessBaseAPI.setImage(bitmap);
+            String result = tessBaseAPI.getUTF8Text();
+            return result == null ? "" : result;
+        } finally {
+            tessBaseAPI.clear();
+        }
+    }
+
+    private Bitmap prepareOcrBitmap(Bitmap source) {
+        int sourceWidth = source.getWidth();
+        int sourceHeight = source.getHeight();
+        int longestSide = Math.max(sourceWidth, sourceHeight);
+        float scale = 1f;
+        if (longestSide < 1800) {
+            scale = Math.min(2f, 1800f / longestSide);
+        } else if (longestSide > 2800) {
+            scale = 2400f / longestSide;
+        }
+
+        int border = 16;
+        int contentWidth = Math.max(1, Math.round(sourceWidth * scale));
+        int contentHeight = Math.max(1, Math.round(sourceHeight * scale));
+        Bitmap output = Bitmap.createBitmap(
+                contentWidth + border * 2, contentHeight + border * 2, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(output);
+        canvas.drawColor(Color.WHITE);
+
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+        // Grayscale with a mild contrast boost; avoid hard thresholding, which
+        // can erase Arabic dots and tashkeel in faint scans.
+        float contrast = 1.15f;
+        float offset = 128f * (1f - contrast);
+        ColorMatrix grayscale = new ColorMatrix();
+        grayscale.setSaturation(0f);
+        ColorMatrix contrastMatrix = new ColorMatrix(new float[] {
+                contrast, 0, 0, 0, offset,
+                0, contrast, 0, 0, offset,
+                0, 0, contrast, 0, offset,
+                0, 0, 0, 1, 0
+        });
+        grayscale.postConcat(contrastMatrix);
+        paint.setColorFilter(new ColorMatrixColorFilter(grayscale));
+        Rect destination = new Rect(border, border, border + contentWidth, border + contentHeight);
+        canvas.drawBitmap(source, null, destination, paint);
+        return output;
+    }
+
+    private int ocrTextScore(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        int arabicLetters = 0;
+        int words = 0;
+        boolean inWord = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            boolean arabic = (c >= '\\u0621' && c <= '\\u064A')
+                    || (c >= '\\u066E' && c <= '\\u06D3')
+                    || (c >= '\\u0750' && c <= '\\u077F');
+            if (arabic && Character.isLetter(c)) arabicLetters++;
+            if (Character.isLetterOrDigit(c)) {
+                if (!inWord) words++;
+                inWord = true;
+            } else {
+                inWord = false;
+            }
+        }
+        return arabicLetters + words * 2;
     }
 
     private void ensureArabicOcrReady() throws Exception {
