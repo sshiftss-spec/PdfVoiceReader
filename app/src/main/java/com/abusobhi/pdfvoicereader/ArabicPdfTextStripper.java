@@ -190,9 +190,7 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
     }
 
     private static boolean isSupportedDigit(char ch) {
-        return (ch >= '0' && ch <= '9')
-                || (ch >= '\\u0660' && ch <= '\\u0669')
-                || (ch >= '\\u06F0' && ch <= '\\u06F9');
+        return Character.digit(ch, 10) >= 0;
     }
 
     private static boolean isOnlyCombiningMarks(String value) {
