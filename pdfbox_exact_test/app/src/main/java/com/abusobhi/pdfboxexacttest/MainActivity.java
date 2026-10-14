@@ -550,18 +550,23 @@ public class MainActivity extends Activity {
         private static final int MAX_PRINTED = 100;
         private final StringBuilder report = new StringBuilder();
         private final List<TextPosition> line = new ArrayList<>();
-        private final List<SpaceBoundary> boundaries = new ArrayList<>();
+        private final List<EmittedSpace> emittedSpaces = new ArrayList<>();
         private int geometricPairCount;
         private int printedCount;
+        private int explicitWhitespaceCount;
 
-        private static class SpaceBoundary {
-            final TextPosition before;
-            final TextPosition after;
-            final String separator;
-            SpaceBoundary(TextPosition before, TextPosition after, String separator) {
-                this.before = before;
-                this.after = after;
-                this.separator = separator;
+        private static class EmittedSpace {
+            final String callbackText;
+            final int index;
+            final int positionCount;
+            final String positionSequence;
+
+            EmittedSpace(String callbackText, int index,
+                         int positionCount, String positionSequence) {
+                this.callbackText = callbackText;
+                this.index = index;
+                this.positionCount = positionCount;
+                this.positionSequence = positionSequence;
             }
         }
 
@@ -572,37 +577,26 @@ public class MainActivity extends Activity {
         @Override
         protected void writeString(String text, List<TextPosition> positions)
                 throws IOException {
-            if (positions == null || positions.isEmpty()) return;
-            line.addAll(positions);
-            String emitted = text == null ? "" : text;
-            int cursor = 0;
-            TextPosition previousMatched = null;
-            for (TextPosition current : positions) {
-                String unicode = current.getUnicode();
-                if (unicode == null || unicode.isEmpty()) continue;
-                int at = emitted.indexOf(unicode, cursor);
-                if (at < 0) {
-                    // A glyph that cannot be aligned must not become the
-                    // previous endpoint for a later whitespace boundary.
-                    continue;
-                }
-                if (previousMatched != null && at > cursor) {
-                    String between = emitted.substring(cursor, at);
-                    if (containsWhitespace(between)) {
-                        boundaries.add(new SpaceBoundary(previousMatched, current, between));
-                        explicitBoundaryCount++;
-                    }
-                }
-                cursor = at + unicode.length();
-                previousMatched = current;
+            if (positions != null && !positions.isEmpty()) {
+                line.addAll(positions);
             }
-        }
+            if (text == null || text.isEmpty()) return;
 
-        private static boolean containsWhitespace(String value) {
-            for (int i = 0; i < value.length(); i++) {
-                if (Character.isWhitespace(value.charAt(i))) return true;
+            StringBuilder sequence = new StringBuilder();
+            if (positions != null) {
+                for (TextPosition p : positions) {
+                    if (sequence.length() > 0) sequence.append(" | ");
+                    sequence.append(GapDiagnosticStripper.describe(p.getUnicode()));
+                }
             }
-            return false;
+            for (int i = 0; i < text.length(); i++) {
+                if (Character.isWhitespace(text.charAt(i))) {
+                    explicitWhitespaceCount++;
+                    emittedSpaces.add(new EmittedSpace(
+                            text, i, positions == null ? 0 : positions.size(),
+                            sequence.toString()));
+                }
+            }
         }
 
         @Override
@@ -618,25 +612,27 @@ public class MainActivity extends Activity {
         }
 
         private void flushLine() {
-            if (line.isEmpty() && boundaries.isEmpty()) return;
+            if (line.isEmpty() && emittedSpaces.isEmpty()) return;
 
-            // First print only space boundaries directly observed in the
-            // emitted string, retaining the TextPosition sequence that
-            // bracketed each separator.
-            for (SpaceBoundary boundary : boundaries) {
+            // Report literal whitespace from PDFTextStripper's emitted string.
+            // Do not claim that it lies between any specific TextPosition pair:
+            // Arabic ordering, diacritics and callback grouping make that mapping
+            // unreliable without a full character-to-glyph alignment algorithm.
+            for (EmittedSpace space : emittedSpaces) {
                 if (printedCount >= MAX_PRINTED) break;
-                TextPosition a = boundary.before;
-                TextPosition b = boundary.after;
-                float gap = a.getXDirAdj()
-                        - (b.getXDirAdj() + Math.max(0f, b.getWidthDirAdj()));
+                int leftStart = Math.max(0, space.index - 18);
+                int rightEnd = Math.min(space.callbackText.length(), space.index + 19);
+                String left = space.callbackText.substring(leftStart, space.index);
+                String right = space.callbackText.substring(
+                        Math.min(space.callbackText.length(), space.index + 1), rightEnd);
                 report.append(String.format(Locale.US,
-                        "OUTPUT-ORDER SPACE: before=%s[x=%.1f,w=%.1f] "
-                        + "after=%s[x=%.1f,w=%.1f] gap=%.2f separator=%s\n",
-                        GapDiagnosticStripper.describe(a.getUnicode()),
-                        a.getXDirAdj(), a.getWidthDirAdj(),
-                        GapDiagnosticStripper.describe(b.getUnicode()),
-                        b.getXDirAdj(), b.getWidthDirAdj(), gap,
-                        GapDiagnosticStripper.describe(boundary.separator)));
+                        "EMITTED TEXT SPACE: index=%d leftContext=%s space=U+0020 "
+                        + "rightContext=%s callbackPositions=%d positionSequence=%s\n",
+                        space.index,
+                        GapDiagnosticStripper.describe(left),
+                        GapDiagnosticStripper.describe(right),
+                        space.positionCount,
+                        GapDiagnosticStripper.describe(space.positionSequence)));
                 printedCount++;
             }
 
@@ -648,41 +644,37 @@ public class MainActivity extends Activity {
             for (int i = 0; i + 1 < glyphs.size() && printedCount < MAX_PRINTED; i++) {
                 TextPosition right = glyphs.get(i);
                 TextPosition left = glyphs.get(i + 1);
+                String ru = right.getUnicode();
+                String lu = left.getUnicode();
+                if (ru == null || lu == null) continue;
                 float gap = right.getXDirAdj()
                         - (left.getXDirAdj() + Math.max(0f, left.getWidthDirAdj()));
                 if (gap <= 2.0f) continue;
                 report.append(String.format(Locale.US,
                         "GEOMETRIC GAP ONLY: R=%s[x=%.1f,w=%.1f] "
                         + "L=%s[x=%.1f,w=%.1f] gap=%.2f\n",
-                        GapDiagnosticStripper.describe(right.getUnicode()),
+                        GapDiagnosticStripper.describe(ru),
                         right.getXDirAdj(), right.getWidthDirAdj(),
-                        GapDiagnosticStripper.describe(left.getUnicode()),
+                        GapDiagnosticStripper.describe(lu),
                         left.getXDirAdj(), left.getWidthDirAdj(), gap));
                 printedCount++;
             }
             geometricPairCount += Math.max(0, glyphs.size() - 1);
             line.clear();
-            boundaries.clear();
+            emittedSpaces.clear();
         }
 
         String report() {
             flushLine();
             report.append("\nAdjacent geometric pairs checked: ").append(geometricPairCount)
-                    .append("\nExplicit whitespace boundaries observed in emitted strings: ")
-                    .append(countBoundaries())
+                    .append("\nExplicit whitespace characters observed in emitted strings: ")
+                    .append(explicitWhitespaceCount)
                     .append("\nRows shown: ").append(printedCount)
                     .append(" (maximum ").append(MAX_PRINTED).append(")")
-                    .append("\nNOTE: output-order spaces and geometry-only gaps are reported separately.");
+                    .append("\nNOTE: emitted-string spaces are shown with textual context only; "
+                            + "geometry-only gaps are separate.");
             return report.toString();
         }
-
-        private int countBoundaries() {
-            // Boundaries are cleared per line after their rows are emitted;
-            // count is accumulated independently below.
-            return explicitBoundaryCount;
-        }
-
-        private int explicitBoundaryCount;
     }
 
     /*
