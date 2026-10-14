@@ -153,7 +153,7 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
             previousWasSpace = currentIsSpace;
             haveGlyph = true;
         }
-        String lineText = lineOutput.toString().trim();
+        String lineText = restoreDigitOrder(lineOutput.toString().trim());
         if (sideHeadingLine && !lineText.isEmpty()) {
             if (sideHeadings.length() > 0) sideHeadings.append(' ');
             sideHeadings.append(lineText);
@@ -163,6 +163,36 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
             lastLineWasSideHeading = false;
         }
         linePositions.clear();
+    }
+
+    /**
+     * Horizontal Arabic lines are assembled right-to-left, but digit sequences
+     * are read left-to-right. Restore the original order inside each contiguous
+     * run of Western, Arabic-Indic, or Eastern Arabic-Indic digits.
+     */
+    private static String restoreDigitOrder(String value) {
+        StringBuilder result = new StringBuilder();
+        StringBuilder digits = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (isSupportedDigit(ch)) {
+                digits.append(ch);
+            } else {
+                if (digits.length() > 0) {
+                    result.append(digits.reverse());
+                    digits.setLength(0);
+                }
+                result.append(ch);
+            }
+        }
+        if (digits.length() > 0) result.append(digits.reverse());
+        return result.toString();
+    }
+
+    private static boolean isSupportedDigit(char ch) {
+        return (ch >= '0' && ch <= '9')
+                || (ch >= '\\u0660' && ch <= '\\u0669')
+                || (ch >= '\\u06F0' && ch <= '\\u06F9');
     }
 
     private static boolean isOnlyCombiningMarks(String value) {
