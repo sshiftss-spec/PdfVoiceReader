@@ -1,7 +1,6 @@
 package com.abusobhi.pdfvoicereader;
 
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
-import com.tom_roush.pdfbox.pdmodel.common.PDRectangle;
 import com.tom_roush.pdfbox.text.PDFTextStripper;
 import com.tom_roush.pdfbox.text.TextPosition;
 
@@ -18,11 +17,10 @@ import java.util.List;
 final class ArabicPdfTextStripper extends PDFTextStripper {
     private final StringBuilder output = new StringBuilder();
     private final List<TextPosition> linePositions = new ArrayList<>();
-    private final float footerStartY;
+    private static final float FOOTER_START_Y = 900.0f;
 
-    private ArabicPdfTextStripper(float pageHeight) throws IOException {
+    private ArabicPdfTextStripper() throws IOException {
         super();
-        footerStartY = pageHeight * 0.75f;
         setSortByPosition(true);
     }
 
@@ -31,9 +29,7 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
         if (pageNumber < 1 || pageNumber > document.getNumberOfPages()) {
             throw new IllegalArgumentException("pageNumber out of range");
         }
-        PDRectangle box = document.getPage(pageNumber - 1).getMediaBox();
-        float pageHeight = box == null ? 0f : box.getHeight();
-        ArabicPdfTextStripper stripper = new ArabicPdfTextStripper(pageHeight);
+        ArabicPdfTextStripper stripper = new ArabicPdfTextStripper();
         stripper.setStartPage(pageNumber);
         stripper.setEndPage(pageNumber);
         stripper.getText(document);
@@ -64,7 +60,7 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
 
         boolean footerLine = false;
         for (TextPosition position : linePositions) {
-            if (position.getYDirAdj() > footerStartY) {
+            if (position.getYDirAdj() > FOOTER_START_Y) {
                 footerLine = true;
                 break;
             }
@@ -101,6 +97,7 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
             Glyph nearest = null;
             float nearestDistance = Float.MAX_VALUE;
             for (Glyph glyph : glyphs) {
+                if (glyph.unicode != null && glyph.unicode.trim().isEmpty()) continue;
                 float center = glyph.x + glyph.width / 2f;
                 float distance = Math.abs(markX - center);
                 if (distance < nearestDistance) {
