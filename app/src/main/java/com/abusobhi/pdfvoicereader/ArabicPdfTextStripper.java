@@ -16,6 +16,7 @@ import java.util.List;
  */
 final class ArabicPdfTextStripper extends PDFTextStripper {
     private final StringBuilder output = new StringBuilder();
+    private final StringBuilder sideHeadings = new StringBuilder();
     private final List<TextPosition> linePositions = new ArrayList<>();
     private static final float FOOTER_START_Y = 900.0f;
 
@@ -59,12 +60,21 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
         if (linePositions.isEmpty()) return;
 
         boolean footerLine = false;
+        int directionalPositions = 0;
+        int verticalPositions = 0;
         for (TextPosition position : linePositions) {
-            if (position.getYDirAdj() > FOOTER_START_Y) {
-                footerLine = true;
-                break;
+            if (position.getYDirAdj() > FOOTER_START_Y) footerLine = true;
+            String unicode = position.getUnicode();
+            if (unicode == null || unicode.trim().isEmpty()) continue;
+            directionalPositions++;
+            float direction = (position.getDir() % 360f + 360f) % 360f;
+            if ((direction >= 80f && direction <= 100f)
+                    || (direction >= 260f && direction <= 280f)) {
+                verticalPositions++;
             }
         }
+        boolean sideHeadingLine = directionalPositions > 0
+                && verticalPositions * 2 >= directionalPositions;
 
         final class Glyph {
             float x;
@@ -108,9 +118,14 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
             if (nearest != null) nearest.unicode += mark.getUnicode();
         }
 
-        // Arabic text is visually read from right to left.
-        Collections.sort(glyphs, (a, b) -> Float.compare(b.x, a.x));
+        // Horizontal Arabic is read right-to-left. For rotated margin labels,
+        // preserve PDFBox's character order instead of sorting by a nearly
+        // constant X coordinate.
+        if (!sideHeadingLine) {
+            Collections.sort(glyphs, (a, b) -> Float.compare(b.x, a.x));
+        }
 
+        StringBuilder lineOutput = new StringBuilder();
         float previousX = Float.NaN;
         float previousWidth = 0f;
         boolean haveGlyph = false;
@@ -122,14 +137,21 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
             boolean currentIsSpace = glyph.unicode.trim().isEmpty();
             if (haveGlyph && footerLine && !previousWasSpace && !currentIsSpace) {
                 float gap = previousX - (glyph.x + glyph.width);
-                if (gap > 20.0f) output.append(' ');
+                if (gap > 20.0f) lineOutput.append(' ');
             }
 
-            output.append(glyph.unicode);
+            lineOutput.append(glyph.unicode);
             previousX = glyph.x;
             previousWidth = glyph.width;
             previousWasSpace = currentIsSpace;
             haveGlyph = true;
+        }
+        String lineText = lineOutput.toString().trim();
+        if (sideHeadingLine && !lineText.isEmpty()) {
+            if (sideHeadings.length() > 0) sideHeadings.append(' ');
+            sideHeadings.append(lineText);
+        } else {
+            output.append(lineOutput);
         }
         linePositions.clear();
     }
@@ -153,6 +175,7 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
 
     private String result() {
         flushLine();
-        return output.toString();
+        if (sideHeadings.length() == 0) return output.toString();
+        return sideHeadings.toString().trim() + "\\n" + output.toString();
     }
 }
