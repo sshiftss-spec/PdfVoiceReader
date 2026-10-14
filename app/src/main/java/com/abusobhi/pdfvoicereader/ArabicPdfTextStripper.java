@@ -153,13 +153,13 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
             previousWasSpace = currentIsSpace;
             haveGlyph = true;
         }
-        String lineText = restoreDigitOrder(lineOutput.toString().trim());
+        String lineText = restoreDigitOrder(lineOutput.toString());
         if (sideHeadingLine && !lineText.isEmpty()) {
             if (sideHeadings.length() > 0) sideHeadings.append(' ');
-            sideHeadings.append(lineText);
+            sideHeadings.append(lineText.trim());
             lastLineWasSideHeading = true;
         } else {
-            output.append(lineOutput);
+            output.append(lineText);
             lastLineWasSideHeading = false;
         }
         linePositions.clear();
