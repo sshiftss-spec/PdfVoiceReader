@@ -631,7 +631,7 @@ public class MainActivity extends Activity {
                         - (b.getXDirAdj() + Math.max(0f, b.getWidthDirAdj()));
                 report.append(String.format(Locale.US,
                         "OUTPUT-ORDER SPACE: before=%s[x=%.1f,w=%.1f] "
-                        + "after=%s[x=%.1f,w=%.1f] gap=%.2f separator=%s\\n",
+                        + "after=%s[x=%.1f,w=%.1f] gap=%.2f separator=%s\n",
                         GapDiagnosticStripper.describe(a.getUnicode()),
                         a.getXDirAdj(), a.getWidthDirAdj(),
                         GapDiagnosticStripper.describe(b.getUnicode()),
@@ -653,7 +653,7 @@ public class MainActivity extends Activity {
                 if (gap <= 2.0f) continue;
                 report.append(String.format(Locale.US,
                         "GEOMETRIC GAP ONLY: R=%s[x=%.1f,w=%.1f] "
-                        + "L=%s[x=%.1f,w=%.1f] gap=%.2f\\n",
+                        + "L=%s[x=%.1f,w=%.1f] gap=%.2f\n",
                         GapDiagnosticStripper.describe(right.getUnicode()),
                         right.getXDirAdj(), right.getWidthDirAdj(),
                         GapDiagnosticStripper.describe(left.getUnicode()),
