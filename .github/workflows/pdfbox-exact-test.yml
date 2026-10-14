@@ -5,6 +5,7 @@ on:
     branches:
       - pdfbox-exact-test
       - pdfbox-exact-test-5e-mark-centering
+      - pdfbox-gap-diagnostics-6
     paths:
       - 'pdfbox_exact_test/**'
       - '.github/workflows/pdfbox-exact-test.yml'
