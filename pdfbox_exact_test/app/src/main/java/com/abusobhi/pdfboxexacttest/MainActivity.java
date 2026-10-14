@@ -643,7 +643,7 @@ public class MainActivity extends Activity {
                 if (printedCount < MAX_PRINTED && (gap > 2.0f || hasOutputSpace)) {
                     report.append(String.format(Locale.US,
                             "R=%s[x=%.1f,w=%.1f] L=%s[x=%.1f,w=%.1f] "
-                            + "gap=%.2f PDFBoxOutputSpace=%s\\n",
+                            + "gap=%.2f PDFBoxOutputSpace=%s\n",
                             GapDiagnosticStripper.describe(right.getUnicode()),
                             right.getXDirAdj(), right.getWidthDirAdj(),
                             GapDiagnosticStripper.describe(left.getUnicode()),
