@@ -561,9 +561,9 @@ public class MainActivity extends AppCompatActivity {
         boolean inWord = false;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            boolean arabic = (c >= '\\u0621' && c <= '\\u064A')
-                    || (c >= '\\u066E' && c <= '\\u06D3')
-                    || (c >= '\\u0750' && c <= '\\u077F');
+            boolean arabic = (c >= '\u0621' && c <= '\u064A')
+                    || (c >= '\u066E' && c <= '\u06D3')
+                    || (c >= '\u0750' && c <= '\u077F');
             if (arabic && Character.isLetter(c)) arabicLetters++;
             if (Character.isLetterOrDigit(c)) {
                 if (!inWord) words++;
