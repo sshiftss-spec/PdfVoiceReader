@@ -143,6 +143,9 @@ public class MainActivity extends Activity {
                 all.append("\n========== 5E: CENTER-BASED DIACRITIC ATTACHMENT ==========\n");
                 all.append(extractPositionRtlCenterMarks(doc, 0.35f));
 
+                all.append("\n========== 5F: POSITION RTL, EXPLICIT SPACES ONLY ==========\n");
+                all.append(extractPositionRtlExplicitSpaces(doc));
+
                 all.append("\n========== 6: ADJACENT GLYPH GAP DIAGNOSTICS ==========\n");
                 all.append(diagnoseGaps(doc));
 
@@ -201,6 +204,17 @@ public class MainActivity extends Activity {
         return stripper.result();
     }
 
+    private String extractPositionRtlExplicitSpaces(
+            PDDocument doc) throws Exception {
+        PositionRtlStripper stripper =
+                new PositionRtlStripper(0.35f, false, true);
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.result();
+    }
+
     private String diagnose(PDDocument doc) throws Exception {
         DiagnosticStripper stripper = new DiagnosticStripper();
         stripper.setStartPage(4);
@@ -220,16 +234,24 @@ public class MainActivity extends Activity {
         private final List<TextPosition> linePositions = new ArrayList<>();
         private final float gapFactor;
         private final boolean centerBasedMarks;
+        private final boolean explicitSpacesOnly;
 
         PositionRtlStripper(float gapFactor) throws IOException {
-            this(gapFactor, false);
+            this(gapFactor, false, false);
         }
 
         PositionRtlStripper(
                 float gapFactor, boolean centerBasedMarks) throws IOException {
+            this(gapFactor, centerBasedMarks, false);
+        }
+
+        PositionRtlStripper(
+                float gapFactor, boolean centerBasedMarks,
+                boolean explicitSpacesOnly) throws IOException {
             super();
             this.gapFactor = gapFactor;
             this.centerBasedMarks = centerBasedMarks;
+            this.explicitSpacesOnly = explicitSpacesOnly;
         }
 
         @Override
@@ -275,7 +297,10 @@ public class MainActivity extends Activity {
 
             for (TextPosition p : linePositions) {
                 String u = p.getUnicode();
-                if (u == null || u.isEmpty() || u.trim().isEmpty()) {
+                if (u == null || u.isEmpty()) {
+                    continue;
+                }
+                if (u.trim().isEmpty() && !explicitSpacesOnly) {
                     continue;
                 }
                 if (isOnlyCombiningMarks(u)) {
@@ -328,7 +353,8 @@ public class MainActivity extends Activity {
                 if (g.unicode == null || g.unicode.isEmpty()) {
                     continue;
                 }
-                if (haveGlyph) {
+                if (haveGlyph && !explicitSpacesOnly
+                        && !g.unicode.trim().isEmpty()) {
                     float gap = previousX - (g.x + g.width);
                     float referenceWidth = Math.max(
                             1.0f, Math.min(previousWidth, g.width));
