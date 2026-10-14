@@ -320,6 +320,9 @@ public class MainActivity extends Activity {
                 Glyph best = null;
                 float bestDistance = Float.MAX_VALUE;
                 for (Glyph g : glyphs) {
+                    if (explicitSpacesOnly && g.unicode.trim().isEmpty()) {
+                        continue;
+                    }
                     float distance;
                     if (centerBasedMarks) {
                         // A mark can lie inside more than one overlapping glyph
@@ -348,12 +351,14 @@ public class MainActivity extends Activity {
             float previousX = Float.NaN;
             float previousWidth = 0f;
             boolean haveGlyph = false;
+            boolean previousWasSpace = false;
 
             for (Glyph g : glyphs) {
                 if (g.unicode == null || g.unicode.isEmpty()) {
                     continue;
                 }
                 if (haveGlyph && !explicitSpacesOnly
+                        && !previousWasSpace
                         && !g.unicode.trim().isEmpty()) {
                     float gap = previousX - (g.x + g.width);
                     float referenceWidth = Math.max(
@@ -365,6 +370,7 @@ public class MainActivity extends Activity {
                 out.append(g.unicode);
                 previousX = g.x;
                 previousWidth = g.width;
+                previousWasSpace = g.unicode.trim().isEmpty();
                 haveGlyph = true;
             }
             linePositions.clear();
