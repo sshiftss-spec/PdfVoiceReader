@@ -149,6 +149,9 @@ public class MainActivity extends Activity {
                 all.append("\n========== 5G: CENTER MARKS + PDFBOX-LIKE GAP THRESHOLD ==========\n");
                 all.append(extractPositionRtlPdfBoxLike(doc));
 
+                all.append("\n========== 5H: CENTER MARKS + EXPLICIT SPACES ONLY ==========\n");
+                all.append(extractPositionRtlExplicitSpacesCenterMarks(doc));
+
                 all.append("\n========== 6: ADJACENT GLYPH GAP DIAGNOSTICS ==========\n");
                 all.append(diagnoseGaps(doc));
 
@@ -222,6 +225,17 @@ public class MainActivity extends Activity {
             PDDocument doc) throws Exception {
         PositionRtlStripper stripper =
                 new PositionRtlStripper(0.35f, true, false, true);
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.result();
+    }
+
+    private String extractPositionRtlExplicitSpacesCenterMarks(
+            PDDocument doc) throws Exception {
+        PositionRtlStripper stripper =
+                new PositionRtlStripper(0.35f, true, true);
         stripper.setStartPage(4);
         stripper.setEndPage(4);
         stripper.setSortByPosition(true);
