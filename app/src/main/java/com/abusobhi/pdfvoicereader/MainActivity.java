@@ -492,24 +492,74 @@ public class MainActivity extends AppCompatActivity {
             if (ocrReady) return;
             File dataDir = new File(getFilesDir(), "tesseract");
             File tessdata = new File(dataDir, "tessdata");
-            if (!tessdata.exists() && !tessdata.mkdirs()) throw new IllegalStateException("تعذر إنشاء مجلد بيانات OCR");
-            File model = new File(tessdata, "ara.traineddata");
-            if (!model.isFile() || model.length() < 1000000) {
-                runOnUiThread(() -> status.setText("جارٍ تجهيز بيانات OCR العربية لأول مرة…"));
-                HttpURLConnection connection = (HttpURLConnection) new URL("https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata").openConnection();
-                connection.setConnectTimeout(20000); connection.setReadTimeout(45000);
-                try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(model)) {
-                    byte[] buffer = new byte[8192]; int count;
-                    while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-                } finally { connection.disconnect(); }
-                if (model.length() < 1000000) { model.delete(); throw new IllegalStateException("لم تكتمل بيانات OCR العربية"); }
+            if (!tessdata.exists() && !tessdata.mkdirs()) {
+                throw new IllegalStateException("تعذر إنشاء مجلد بيانات OCR");
             }
+            File model = new File(tessdata, "ara.traineddata");
+
+            // Reuse a model only if Tesseract can actually initialize it.
             TessBaseAPI api = new TessBaseAPI();
+            if (model.isFile() && model.length() > 1000000
+                    && api.init(dataDir.getAbsolutePath(), "ara")) {
+                api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+                tessBaseAPI = api;
+                ocrReady = true;
+                return;
+            }
+            api.end();
+            if (model.exists()) model.delete();
+
+            runOnUiThread(() -> status.setText("جارٍ تنزيل بيانات OCR العربية لأول مرة…"));
+            File temporaryModel = new File(tessdata, "ara.traineddata.download");
+            if (temporaryModel.exists()) temporaryModel.delete();
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(
+                        "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata")
+                        .openConnection();
+                connection.setInstanceFollowRedirects(true);
+                connection.setConnectTimeout(25000);
+                connection.setReadTimeout(60000);
+                connection.setRequestProperty("User-Agent", "PdfVoiceReader-Android");
+                int responseCode = connection.getResponseCode();
+                if (responseCode != HttpURLConnection.HTTP_OK) {
+                    throw new java.io.IOException("فشل تنزيل نموذج OCR (HTTP " + responseCode + ")");
+                }
+                try (InputStream in = connection.getInputStream();
+                     FileOutputStream out = new FileOutputStream(temporaryModel)) {
+                    byte[] buffer = new byte[16384];
+                    int count;
+                    while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                    out.getFD().sync();
+                }
+            } catch (Exception downloadError) {
+                temporaryModel.delete();
+                throw new IllegalStateException(
+                        "تعذر تنزيل نموذج OCR العربي. تحقق من اتصال الإنترنت ثم أعد المحاولة. التفاصيل: "
+                                + downloadError.getMessage(), downloadError);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+
+            if (!temporaryModel.isFile() || temporaryModel.length() < 1000000) {
+                temporaryModel.delete();
+                throw new IllegalStateException("نموذج OCR العربي الذي تم تنزيله غير مكتمل؛ أعد المحاولة مع اتصال مستقر.");
+            }
+            if (!temporaryModel.renameTo(model)) {
+                temporaryModel.delete();
+                throw new IllegalStateException("تعذر حفظ نموذج OCR العربي على الهاتف.");
+            }
+
+            api = new TessBaseAPI();
             if (!api.init(dataDir.getAbsolutePath(), "ara")) {
-                api.end(); throw new IllegalStateException("تعذر تهيئة محرك OCR باللغة العربية");
+                api.end();
+                model.delete();
+                throw new IllegalStateException("تم تنزيل نموذج OCR لكن تعذرت تهيئته؛ أعد المحاولة.");
             }
             api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
-            tessBaseAPI = api; ocrReady = true;
+            tessBaseAPI = api;
+            ocrReady = true;
+            runOnUiThread(() -> status.setText("تم تجهيز OCR العربي"));
         }
     }
 
