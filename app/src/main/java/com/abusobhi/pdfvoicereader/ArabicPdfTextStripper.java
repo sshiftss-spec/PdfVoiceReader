@@ -125,6 +125,11 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
         // constant X coordinate.
         if (!sideHeadingLine) {
             Collections.sort(glyphs, (a, b) -> Float.compare(b.x, a.x));
+        } else {
+            // PDFBox's extraction order for vertically rotated Arabic labels
+            // can run opposite to natural reading order. Reverse the glyphs
+            // so the spoken heading follows the intended Arabic sequence.
+            Collections.reverse(glyphs);
         }
 
         StringBuilder lineOutput = new StringBuilder();
