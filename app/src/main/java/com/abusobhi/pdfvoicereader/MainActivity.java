@@ -420,29 +420,10 @@ public class MainActivity extends AppCompatActivity {
                 previousLineWasBlank = false;
             }
         }
-        return moveSideHeadingToBeginning(normalized.toString().replaceAll(" *\\n\\n *", "\\n\\n").trim());
+        // ArabicPdfTextStripper places rotated margin headings before the body.
+        return normalized.toString().replaceAll(" *\\n\\n *", "\\n\\n").trim();
     }
 
-    private String moveSideHeadingToBeginning(String text) {
-        if (text == null || text.isEmpty()) return text;
-
-        // This label is printed in the page margin. Move it to the start of
-        // speech even when PDFBox extracts it after the main text.
-        String marks = "[\\u064B-\\u065F\\u0670\\u0640]*";
-        String sideHeadingPattern =
-                "ا" + marks + "ل" + marks + "ن" + marks + "ه" + marks + "ي" + marks
-                + "\\s+"
-                + "ع" + marks + "ن" + marks
-                + "\\s+"
-                + "ا" + marks + "ل" + marks + "ا" + marks + "ب" + marks
-                + "ت" + marks + "د" + marks + "ا" + marks + "ع" + marks;
-        java.util.regex.Matcher matcher =
-                java.util.regex.Pattern.compile(sideHeadingPattern).matcher(text);
-        if (!matcher.find()) return text;
-
-        String body = matcher.replaceAll(" ").replaceAll("[\\t ]+", " ").trim();
-        return body.isEmpty() ? "النهي عن الابتداع" : "النهي عن الابتداع. " + body;
-    }
 
     private boolean isPdfFooterLine(String line) {
         if (line == null || line.isEmpty()) return false;
