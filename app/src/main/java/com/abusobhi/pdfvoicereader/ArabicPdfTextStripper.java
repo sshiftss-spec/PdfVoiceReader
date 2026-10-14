@@ -17,6 +17,7 @@ import java.util.List;
 final class ArabicPdfTextStripper extends PDFTextStripper {
     private final StringBuilder output = new StringBuilder();
     private final StringBuilder sideHeadings = new StringBuilder();
+    private boolean lastLineWasSideHeading;
     private final List<TextPosition> linePositions = new ArrayList<>();
     private static final float FOOTER_START_Y = 900.0f;
 
@@ -47,7 +48,8 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
     @Override
     protected void writeLineSeparator() throws IOException {
         flushLine();
-        output.append('\n');
+        if (!lastLineWasSideHeading) output.append('\n');
+        lastLineWasSideHeading = false;
     }
 
     @Override
@@ -150,8 +152,10 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
         if (sideHeadingLine && !lineText.isEmpty()) {
             if (sideHeadings.length() > 0) sideHeadings.append(' ');
             sideHeadings.append(lineText);
+            lastLineWasSideHeading = true;
         } else {
             output.append(lineOutput);
+            lastLineWasSideHeading = false;
         }
         linePositions.clear();
     }
@@ -176,6 +180,6 @@ final class ArabicPdfTextStripper extends PDFTextStripper {
     private String result() {
         flushLine();
         if (sideHeadings.length() == 0) return output.toString();
-        return sideHeadings.toString().trim() + "\\n" + output.toString();
+        return sideHeadings.toString().trim() + "\n" + output.toString();
     }
 }
