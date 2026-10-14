@@ -338,10 +338,8 @@ public class MainActivity extends AppCompatActivity {
                     extractedPages = new String[doc.getNumberOfPages()][];
                     boolean hasText = false;
                     for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                        PDFTextStripper stripper = new PDFTextStripper();
-                        stripper.setStartPage(i + 1);
-                        stripper.setEndPage(i + 1);
-                        String pageText = normalizeTextForSpeech(stripper.getText(doc));
+                        String pageText = normalizeTextForSpeech(
+                                ArabicPdfTextStripper.extractPage(doc, i + 1));
                         if (!pageText.isEmpty()) {
                             extractedPages[i] = splitText(pageText, 1600);
                             hasText = true;
