@@ -19,6 +19,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Locale;
 
@@ -145,6 +147,9 @@ public class MainActivity extends Activity {
 
                 all.append("\n========== 7: PDFBOX-STYLE RTL THRESHOLD DISAGREEMENTS ==========\n");
                 all.append(diagnosePdfBoxThreshold(doc));
+
+                all.append("\n========== 8: PDFBOX DEFAULT WORD-BOUNDARY CHECK ==========\n");
+                all.append(diagnosePdfBoxWordBoundaries(doc));
 
                 result = all.toString();
 
@@ -521,6 +526,113 @@ public class MainActivity extends Activity {
                     .append("\nPairs shown: ").append(printedPairs)
                     .append(" (maximum ").append(MAX_PAIRS).append(")");
             report.append("\nNOTE: pdfLike is diagnostic only; no text rule changed.");
+            return report.toString();
+        }
+    }
+
+    /*
+     * Diagnostic only: asks the real PDFTextStripper which TextPositions it
+     * grouped into each output word, then checks the same adjacent glyph pairs
+     * in visual RTL order. This distinguishes a likely missing word boundary
+     * from a threshold that would split letters already grouped as one word.
+     */
+    private String diagnosePdfBoxWordBoundaries(PDDocument doc) throws Exception {
+        PdfBoxWordBoundaryStripper stripper = new PdfBoxWordBoundaryStripper();
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.report();
+    }
+
+    private static class PdfBoxWordBoundaryStripper extends PDFTextStripper {
+        private static final int MAX_PRINTED = 100;
+        private final StringBuilder report = new StringBuilder();
+        private final List<TextPosition> line = new ArrayList<>();
+        private final Map<TextPosition, String> wordByPosition =
+                new IdentityHashMap<>();
+        private int wordNumber;
+        private int pairCount;
+        private int printedCount;
+        private int sameWordCount;
+        private int differentWordCount;
+
+        PdfBoxWordBoundaryStripper() throws IOException {
+            super();
+        }
+
+        @Override
+        protected void writeString(String text, List<TextPosition> positions)
+                throws IOException {
+            wordNumber++;
+            if (positions == null) return;
+            String label = String.format(Locale.US, "W%03d:%s",
+                    wordNumber, text == null ? "(null)" : text);
+            for (TextPosition p : positions) {
+                line.add(p);
+                wordByPosition.put(p, label);
+            }
+        }
+
+        @Override
+        protected void writeLineSeparator() throws IOException {
+            flushLine();
+            report.append("\n");
+        }
+
+        @Override
+        protected void writePageEnd() throws IOException {
+            flushLine();
+            super.writePageEnd();
+        }
+
+        private void flushLine() {
+            if (line.isEmpty()) return;
+            List<TextPosition> glyphs = new ArrayList<>(line);
+            Collections.sort(glyphs, (a, b) ->
+                    Float.compare(b.getXDirAdj(), a.getXDirAdj()));
+
+            for (int i = 0; i + 1 < glyphs.size(); i++) {
+                TextPosition right = glyphs.get(i);
+                TextPosition left = glyphs.get(i + 1);
+                float gap = right.getXDirAdj()
+                        - (left.getXDirAdj() + Math.max(0f, left.getWidthDirAdj()));
+                String rightWord = wordByPosition.get(right);
+                String leftWord = wordByPosition.get(left);
+                boolean sameWord = rightWord != null && rightWord.equals(leftWord);
+                pairCount++;
+                if (sameWord) sameWordCount++;
+                else differentWordCount++;
+
+                // Report the same range where threshold disagreements appeared,
+                // plus every actual PDFBox word boundary, up to a safe limit.
+                if (printedCount < MAX_PRINTED
+                        && (gap > 2.0f || !sameWord)) {
+                    report.append(String.format(Locale.US,
+                            "R=%s %s[x=%.1f,w=%.1f] "
+                            + "L=%s %s[x=%.1f,w=%.1f] gap=%.2f PDFBoxSameWord=%s\n",
+                            GapDiagnosticStripper.describe(right.getUnicode()),
+                            rightWord == null ? "(unmapped)" : rightWord,
+                            right.getXDirAdj(), right.getWidthDirAdj(),
+                            GapDiagnosticStripper.describe(left.getUnicode()),
+                            leftWord == null ? "(unmapped)" : leftWord,
+                            left.getXDirAdj(), left.getWidthDirAdj(),
+                            gap, sameWord ? "YES" : "NO"));
+                    printedCount++;
+                }
+            }
+            line.clear();
+            wordByPosition.clear();
+        }
+
+        String report() {
+            flushLine();
+            report.append("\nAdjacent pairs checked: ").append(pairCount)
+                    .append("\nPairs inside the same PDFBox word: ").append(sameWordCount)
+                    .append("\nPairs across PDFBox word boundaries: ").append(differentWordCount)
+                    .append("\nPairs shown: ").append(printedCount)
+                    .append(" (maximum ").append(MAX_PRINTED).append(")")
+                    .append("\nNOTE: uses actual PDFTextStripper word grouping; no extraction rules changed.");
             return report.toString();
         }
     }
