@@ -143,6 +143,9 @@ public class MainActivity extends Activity {
                 all.append("\n========== 6: ADJACENT GLYPH GAP DIAGNOSTICS ==========\n");
                 all.append(diagnoseGaps(doc));
 
+                all.append("\n========== 7: PDFBOX-STYLE RTL THRESHOLD DISAGREEMENTS ==========\n");
+                all.append(diagnosePdfBoxThreshold(doc));
+
                 result = all.toString();
 
             } catch (Throwable e) {
@@ -365,6 +368,15 @@ public class MainActivity extends Activity {
      * line, comparing the current fixed-width rule with a PDFBox-inspired
      * threshold. It does not change the extracted text or choose a new rule.
      */
+    private String diagnosePdfBoxThreshold(PDDocument doc) throws Exception {
+        PdfBoxThresholdStripper stripper = new PdfBoxThresholdStripper();
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.report();
+    }
+
     private String diagnoseGaps(PDDocument doc) throws Exception {
         GapDiagnosticStripper stripper = new GapDiagnosticStripper();
         stripper.setStartPage(4);
@@ -509,6 +521,123 @@ public class MainActivity extends Activity {
                     .append("\nPairs shown: ").append(printedPairs)
                     .append(" (maximum ").append(MAX_PAIRS).append(")");
             report.append("\nNOTE: pdfLike is diagnostic only; no text rule changed.");
+            return report.toString();
+        }
+    }
+
+    /*
+     * Diagnostic-only comparison using PDFTextStripper's two threshold ideas
+     * adapted to descending-X RTL order. This does not change sections 1-6.
+     */
+    private static class PdfBoxThresholdStripper extends PDFTextStripper {
+        private final StringBuilder report = new StringBuilder();
+        private final List<TextPosition> line = new ArrayList<>();
+        private int pairCount;
+        private int disagreementCount;
+        private int printedCount;
+        private static final int MAX_PRINTED = 180;
+
+        PdfBoxThresholdStripper() throws IOException {
+            super();
+        }
+
+        @Override
+        protected void writeString(String text, List<TextPosition> positions)
+                throws IOException {
+            if (positions != null) line.addAll(positions);
+        }
+
+        @Override
+        protected void writeLineSeparator() throws IOException {
+            flushLine();
+        }
+
+        @Override
+        protected void writePageEnd() throws IOException {
+            flushLine();
+            super.writePageEnd();
+        }
+
+        private void flushLine() {
+            if (line.isEmpty()) return;
+            List<TextPosition> glyphs = new ArrayList<>();
+            for (TextPosition p : line) {
+                String u = p.getUnicode();
+                if (u == null || u.trim().isEmpty() || GapDiagnosticStripper.isOnlyMarks(u)) {
+                    continue;
+                }
+                glyphs.add(p);
+            }
+            Collections.sort(glyphs, (a, b) ->
+                    Float.compare(b.getXDirAdj(), a.getXDirAdj()));
+
+            float previousAverageCharWidth = -1f;
+            float previousSpaceWidth = -1f;
+            for (int i = 0; i + 1 < glyphs.size(); i++) {
+                TextPosition right = glyphs.get(i);
+                TextPosition left = glyphs.get(i + 1);
+                float gap = right.getXDirAdj()
+                        - (left.getXDirAdj() + Math.max(0f, left.getWidthDirAdj()));
+                float rw = Math.max(0f, right.getWidthDirAdj());
+                float lw = Math.max(0f, left.getWidthDirAdj());
+                float fixedThreshold = Math.max(2f, Math.min(rw, lw) * 0.35f);
+
+                int count = left.getIndividualWidths() == null
+                        ? 0 : left.getIndividualWidths().length;
+                if (count <= 0) {
+                    String u = left.getUnicode();
+                    count = (u == null || u.isEmpty()) ? 1
+                            : Math.max(1, u.codePointCount(0, u.length()));
+                }
+                float currentAverage = lw / count;
+                float averageCharWidth = previousAverageCharWidth < 0f
+                        ? currentAverage
+                        : (previousAverageCharWidth + currentAverage) / 2f;
+                float deltaChar = averageCharWidth * 0.3f;
+
+                float currentSpace = left.getWidthOfSpace();
+                float deltaSpace;
+                if (!(currentSpace > 0f) || Float.isNaN(currentSpace)) {
+                    deltaSpace = Float.MAX_VALUE;
+                } else if (!(previousSpaceWidth > 0f)
+                        || Float.isNaN(previousSpaceWidth)) {
+                    deltaSpace = currentSpace * 0.5f;
+                } else {
+                    deltaSpace = (currentSpace + previousSpaceWidth) / 2f * 0.5f;
+                }
+                float pdfBoxThreshold = Math.min(deltaSpace, deltaChar);
+
+                boolean fixedSpace = gap > fixedThreshold;
+                boolean pdfBoxSpace = gap > pdfBoxThreshold;
+                pairCount++;
+                if (fixedSpace != pdfBoxSpace) {
+                    disagreementCount++;
+                    if (printedCount < MAX_PRINTED) {
+                        report.append(String.format(Locale.US,
+                                "R=%s[x=%.1f,w=%.1f] L=%s[x=%.1f,w=%.1f] "
+                                + "gap=%.2f fixed35=%.2f:%s pdfBoxLike=%.2f:%s\n",
+                                GapDiagnosticStripper.describe(right.getUnicode()),
+                                right.getXDirAdj(), rw,
+                                GapDiagnosticStripper.describe(left.getUnicode()),
+                                left.getXDirAdj(), lw, gap, fixedThreshold,
+                                fixedSpace ? "SPACE" : "JOIN", pdfBoxThreshold,
+                                pdfBoxSpace ? "SPACE" : "JOIN"));
+                        printedCount++;
+                    }
+                }
+                previousAverageCharWidth = averageCharWidth;
+                previousSpaceWidth = currentSpace;
+            }
+            line.clear();
+        }
+
+        String report() {
+            flushLine();
+            report.append("Adjacent pairs analysed: ").append(pairCount)
+                    .append("\nThreshold disagreements: ").append(disagreementCount)
+                    .append("\nDisagreements shown: ").append(printedCount)
+                    .append(" (maximum ").append(MAX_PRINTED).append(")")
+                    .append("\nNOTE: diagnostic only; extraction rules are unchanged.");
             return report.toString();
         }
     }
