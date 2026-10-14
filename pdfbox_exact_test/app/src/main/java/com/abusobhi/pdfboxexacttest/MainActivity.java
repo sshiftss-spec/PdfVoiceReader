@@ -316,7 +316,7 @@ public class MainActivity extends Activity {
                     spaceWidth = p.getWidthOfSpace();
                     String value = p.getUnicode();
                     unicode = value;
-                    int[] individualWidths = p.getIndividualWidths();
+                    float[] individualWidths = p.getIndividualWidths();
                     charCount = individualWidths == null
                             ? 0 : individualWidths.length;
                     if (charCount <= 0) {
