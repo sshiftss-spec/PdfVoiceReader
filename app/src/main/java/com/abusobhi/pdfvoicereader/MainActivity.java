@@ -437,10 +437,11 @@ public class MainActivity extends AppCompatActivity {
         boolean hasIndexPrompt = key.contains("اضغط للعودة للفهرس");
         boolean hasAuthorCredit = key.contains("بواسطة")
                 && key.contains("المقداد حمدي");
+        boolean hasPublishingFooter = key.contains("النشر والتوزيع");
         boolean hasFortyHadithTitle = key.contains("الاربعين النووية");
         // The title appears in this PDF's page footer. Drop it when it is a
         // footer by itself or alongside either of the other footer labels.
-        return hasIndexPrompt || hasAuthorCredit
+        return hasIndexPrompt || hasAuthorCredit || hasPublishingFooter
                 || (hasFortyHadithTitle
                     && (key.length() < 45 || hasIndexPrompt || key.contains("بواسطة")));
     }
