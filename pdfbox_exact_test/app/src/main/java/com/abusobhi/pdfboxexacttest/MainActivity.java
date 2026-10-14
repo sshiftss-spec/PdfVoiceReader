@@ -140,6 +140,9 @@ public class MainActivity extends Activity {
                 all.append("\n========== 5E: CENTER-BASED DIACRITIC ATTACHMENT ==========\n");
                 all.append(extractPositionRtlCenterMarks(doc, 0.35f));
 
+                all.append("\n========== 6: ADJACENT GLYPH GAP DIAGNOSTICS ==========\n");
+                all.append(diagnoseGaps(doc));
+
                 result = all.toString();
 
             } catch (Throwable e) {
@@ -354,6 +357,159 @@ public class MainActivity extends Activity {
         String result() {
             flushLine();
             return out.toString();
+        }
+    }
+
+    /*
+     * Diagnostic only. Reports the geometry of adjacent glyphs on each PDFBox
+     * line, comparing the current fixed-width rule with a PDFBox-inspired
+     * threshold. It does not change the extracted text or choose a new rule.
+     */
+    private String diagnoseGaps(PDDocument doc) throws Exception {
+        GapDiagnosticStripper stripper = new GapDiagnosticStripper();
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.report();
+    }
+
+    private static class GapDiagnosticStripper extends PDFTextStripper {
+        private static final int MAX_PAIRS = 220;
+        private final StringBuilder report = new StringBuilder();
+        private final List<TextPosition> line = new ArrayList<>();
+        private int pairCount;
+        private int printedPairs;
+        private int lineCount;
+
+        GapDiagnosticStripper() throws IOException {
+            super();
+        }
+
+        @Override
+        protected void writeString(String text, List<TextPosition> positions)
+                throws IOException {
+            if (positions != null) {
+                line.addAll(positions);
+            }
+        }
+
+        @Override
+        protected void writeLineSeparator() throws IOException {
+            flushLine();
+            report.append("\n");
+        }
+
+        @Override
+        protected void writePageEnd() throws IOException {
+            flushLine();
+            super.writePageEnd();
+        }
+
+        private void flushLine() {
+            if (line.isEmpty()) return;
+
+            List<TextPosition> glyphs = new ArrayList<>();
+            for (TextPosition p : line) {
+                String u = p.getUnicode();
+                if (u == null || u.trim().isEmpty()
+                        || isOnlyMarks(u)) continue;
+                glyphs.add(p);
+            }
+            Collections.sort(glyphs, (a, b) ->
+                    Float.compare(b.getXDirAdj(), a.getXDirAdj()));
+
+            if (glyphs.size() >= 2) {
+                lineCount++;
+                report.append(String.format(Locale.US,
+                        "\nLINE %03d glyphs=%d\n", lineCount, glyphs.size()));
+                for (int i = 0; i + 1 < glyphs.size(); i++) {
+                    TextPosition right = glyphs.get(i);
+                    TextPosition left = glyphs.get(i + 1);
+
+                    float rx = right.getXDirAdj();
+                    float rw = Math.max(0f, right.getWidthDirAdj());
+                    float lx = left.getXDirAdj();
+                    float lw = Math.max(0f, left.getWidthDirAdj());
+                    // RTL: distance from the right edge of the left glyph
+                    // to the starting edge of the glyph immediately to its right.
+                    float gap = rx - (lx + lw);
+                    float fixedThreshold = Math.max(2f,
+                            Math.min(Math.max(0f, rw), Math.max(0f, lw)) * 0.35f);
+
+                    float rightSpace = right.getWidthOfSpace();
+                    float leftSpace = left.getWidthOfSpace();
+                    float space = validPositive(rightSpace) && validPositive(leftSpace)
+                            ? (rightSpace + leftSpace) / 2f
+                            : (validPositive(rightSpace) ? rightSpace : leftSpace);
+                    int rightCount = Math.max(1, right.getUnicode().codePointCount(
+                            0, right.getUnicode().length()));
+                    int leftCount = Math.max(1, left.getUnicode().codePointCount(
+                            0, left.getUnicode().length()));
+                    float averageChar = ((rw / rightCount) + (lw / leftCount)) / 2f;
+                    float pdfLikeThreshold = validPositive(space)
+                            ? Math.min(space * 0.5f, averageChar * 0.3f)
+                            : averageChar * 0.3f;
+
+                    boolean fixedAdds = gap > fixedThreshold;
+                    boolean pdfLikeAdds = gap > pdfLikeThreshold;
+                    pairCount++;
+
+                    // Keep the report useful: print pairs near a possible boundary,
+                    // and all cases where the two candidate rules disagree.
+                    if (printedPairs < MAX_PAIRS
+                            && (gap > -1.0f || fixedAdds != pdfLikeAdds)) {
+                        report.append(String.format(Locale.US,
+                                "R=%s[x=%.1f,w=%.1f,sp=%.1f] "
+                                + "L=%s[x=%.1f,w=%.1f,sp=%.1f] "
+                                + "gap=%.2f fixed35=%.2f:%s pdfLike=%.2f:%s\n",
+                                describe(right.getUnicode()), rx, rw, rightSpace,
+                                describe(left.getUnicode()), lx, lw, leftSpace,
+                                gap, fixedThreshold, fixedAdds ? "SPACE" : "JOIN",
+                                pdfLikeThreshold, pdfLikeAdds ? "SPACE" : "JOIN"));
+                        printedPairs++;
+                    }
+                }
+            }
+            line.clear();
+        }
+
+        private static boolean validPositive(float value) {
+            return value > 0f && !Float.isNaN(value)
+                    && !Float.isInfinite(value);
+        }
+
+        private static boolean isOnlyMarks(String value) {
+            if (value == null || value.isEmpty()) return false;
+            for (int i = 0; i < value.length();) {
+                int cp = value.codePointAt(i);
+                int type = Character.getType(cp);
+                if (type != Character.NON_SPACING_MARK
+                        && type != Character.COMBINING_SPACING_MARK
+                        && type != Character.ENCLOSING_MARK) return false;
+                i += Character.charCount(cp);
+            }
+            return true;
+        }
+
+        private static String describe(String value) {
+            if (value == null) return "(null)";
+            StringBuilder codes = new StringBuilder();
+            value.codePoints().forEach(cp -> {
+                if (codes.length() > 0) codes.append(',');
+                codes.append(String.format(Locale.US, "U+%04X", cp));
+            });
+            return "'" + value.replace("\n", "\\n") + "'[" + codes + "]";
+        }
+
+        String report() {
+            flushLine();
+            report.append("\nLines analysed: ").append(lineCount)
+                    .append("\nAdjacent pairs analysed: ").append(pairCount)
+                    .append("\nPairs shown: ").append(printedPairs)
+                    .append(" (maximum ").append(MAX_PAIRS).append(")");
+            report.append("\nNOTE: pdfLike is diagnostic only; no text rule changed.");
+            return report.toString();
         }
     }
 
