@@ -84,7 +84,12 @@ public class MainActivity extends AppCompatActivity {
                         try (InputStream in = getContentResolver().openInputStream(uri)) {
                             Bitmap bitmap = BitmapFactory.decodeStream(in);
                             if (bitmap == null) throw new IllegalStateException("تعذر فتح الصورة");
-                            runOnUiThread(() -> { fileName.setText("صورة للقراءة"); pageImage.setImageBitmap(bitmap); resetPageZoom(); });
+                            runOnUiThread(() -> {
+                                fileName.setText("صورة للقراءة");
+                                pageImage.setImageBitmap(bitmap);
+                                resetPageZoom();
+                                status.setText("تم فتح الصورة؛ جارٍ تجهيز قارئ النص العربي...");
+                            });
                             String text = runOcr(bitmap);
                             setStandaloneText(text, "استخراج النص من الصورة");
                         } catch (Exception e) { showOcrError(e); }
@@ -477,12 +482,16 @@ public class MainActivity extends AppCompatActivity {
 
     private String runOcr(Bitmap bitmap) throws Exception {
         ensureArabicOcrReady();
+        runOnUiThread(() -> status.setText("تم تجهيز OCR العربي؛ جارٍ استخراج النص من الصورة..."));
         synchronized (this) {
             if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
-            tessBaseAPI.setImage(bitmap);
-            String result = tessBaseAPI.getUTF8Text();
-            tessBaseAPI.clear();
-            return result == null ? "" : result;
+            try {
+                tessBaseAPI.setImage(bitmap);
+                String result = tessBaseAPI.getUTF8Text();
+                return result == null ? "" : result;
+            } finally {
+                tessBaseAPI.clear();
+            }
         }
     }
 
