@@ -161,6 +161,9 @@ public class MainActivity extends Activity {
                 all.append("\n========== 8: PDFBOX DEFAULT WORD-BOUNDARY CHECK ==========\n");
                 all.append(diagnosePdfBoxWordBoundaries(doc));
 
+                all.append("\n========== 9: FOOTER CALLBACK / LINE DIAGNOSTICS ==========\n");
+                all.append(diagnoseFooterCallbacks(doc));
+
                 result = all.toString();
 
             } catch (Throwable e) {
@@ -241,6 +244,15 @@ public class MainActivity extends Activity {
         stripper.setSortByPosition(true);
         stripper.getText(doc);
         return stripper.result();
+    }
+
+    private String diagnoseFooterCallbacks(PDDocument doc) throws Exception {
+        FooterCallbackStripper stripper = new FooterCallbackStripper();
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.report();
     }
 
     private String diagnose(PDDocument doc) throws Exception {
@@ -884,6 +896,94 @@ public class MainActivity extends Activity {
                     .append("\nDisagreements shown: ").append(printedCount)
                     .append(" (maximum ").append(MAX_PRINTED).append(")")
                     .append("\nNOTE: diagnostic only; extraction rules are unchanged.");
+            return report.toString();
+        }
+    }
+
+    /*
+     * Diagnostic only: preserve PDFTextStripper callback boundaries and show
+     * the text/geometry associated with each callback. This helps determine
+     * whether footer labels are delivered as separate lines or one line.
+     */
+    private static class FooterCallbackStripper extends PDFTextStripper {
+        private static final int MAX_CALLBACKS = 120;
+        private static final int MAX_POSITIONS_PER_CALLBACK = 6;
+        private final StringBuilder report = new StringBuilder();
+        private int callbackCount;
+        private int lineCount;
+        private int omittedCallbacks;
+
+        FooterCallbackStripper() throws IOException {
+            super();
+        }
+
+        @Override
+        protected void writeString(String text, List<TextPosition> positions)
+                throws IOException {
+            callbackCount++;
+            if (callbackCount > MAX_CALLBACKS) {
+                omittedCallbacks++;
+                return;
+            }
+
+            List<TextPosition> safePositions = positions == null
+                    ? Collections.emptyList() : positions;
+            report.append(String.format(Locale.US,
+                    "CALLBACK %03d line=%03d positions=%d text=%s\\n",
+                    callbackCount, lineCount + 1, safePositions.size(),
+                    quote(text)));
+
+            int limit = Math.min(safePositions.size(), MAX_POSITIONS_PER_CALLBACK);
+            for (int i = 0; i < limit; i++) {
+                TextPosition p = safePositions.get(i);
+                report.append(String.format(Locale.US,
+                        "  P%02d x=%.1f y=%.1f w=%.1f unicode=%s\\n",
+                        i, p.getXDirAdj(), p.getYDirAdj(),
+                        p.getWidthDirAdj(), quote(p.getUnicode())));
+            }
+            if (safePositions.size() > limit) {
+                TextPosition p = safePositions.get(safePositions.size() - 1);
+                report.append(String.format(Locale.US,
+                        "  LAST x=%.1f y=%.1f w=%.1f unicode=%s\\n",
+                        p.getXDirAdj(), p.getYDirAdj(),
+                        p.getWidthDirAdj(), quote(p.getUnicode())));
+            }
+        }
+
+        @Override
+        protected void writeLineSeparator() throws IOException {
+            lineCount++;
+            report.append(String.format(Locale.US,
+                    "--- PDFBOX LINE SEPARATOR %03d ---\\n", lineCount));
+            super.writeLineSeparator();
+        }
+
+        @Override
+        protected void writePageEnd() throws IOException {
+            report.append("--- PDFBOX PAGE END ---\\n");
+            super.writePageEnd();
+        }
+
+        private static String quote(String value) {
+            if (value == null) return "(null)";
+            String cleaned = value.replace("\\", "\\\\")
+                    .replace("\r", "\\r")
+                    .replace("\n", "\\n")
+                    .replace("\t", "\\t");
+            if (cleaned.length() > 180) {
+                cleaned = cleaned.substring(0, 180) + "...";
+            }
+            return "'" + cleaned + "'";
+        }
+
+        String report() {
+            report.append("\\nCallback count: ").append(callbackCount)
+                    .append("\\nPDFBox line separators: ").append(lineCount);
+            if (omittedCallbacks > 0) {
+                report.append("\\nCallbacks omitted after limit: ")
+                        .append(omittedCallbacks);
+            }
+            report.append("\\nNOTE: diagnostic only; no extraction behavior changed.");
             return report.toString();
         }
     }
