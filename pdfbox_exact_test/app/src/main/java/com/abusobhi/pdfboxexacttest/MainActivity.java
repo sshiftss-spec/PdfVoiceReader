@@ -146,6 +146,9 @@ public class MainActivity extends Activity {
                 all.append("\n========== 5F: POSITION RTL, EXPLICIT SPACES ONLY ==========\n");
                 all.append(extractPositionRtlExplicitSpaces(doc));
 
+                all.append("\n========== 5G: CENTER MARKS + PDFBOX-LIKE GAP THRESHOLD ==========\n");
+                all.append(extractPositionRtlPdfBoxLike(doc));
+
                 all.append("\n========== 6: ADJACENT GLYPH GAP DIAGNOSTICS ==========\n");
                 all.append(diagnoseGaps(doc));
 
@@ -215,6 +218,17 @@ public class MainActivity extends Activity {
         return stripper.result();
     }
 
+    private String extractPositionRtlPdfBoxLike(
+            PDDocument doc) throws Exception {
+        PositionRtlStripper stripper =
+                new PositionRtlStripper(0.35f, true, false, true);
+        stripper.setStartPage(4);
+        stripper.setEndPage(4);
+        stripper.setSortByPosition(true);
+        stripper.getText(doc);
+        return stripper.result();
+    }
+
     private String diagnose(PDDocument doc) throws Exception {
         DiagnosticStripper stripper = new DiagnosticStripper();
         stripper.setStartPage(4);
@@ -235,23 +249,32 @@ public class MainActivity extends Activity {
         private final float gapFactor;
         private final boolean centerBasedMarks;
         private final boolean explicitSpacesOnly;
+        private final boolean pdfBoxLikeSpacing;
 
         PositionRtlStripper(float gapFactor) throws IOException {
-            this(gapFactor, false, false);
+            this(gapFactor, false, false, false);
         }
 
         PositionRtlStripper(
                 float gapFactor, boolean centerBasedMarks) throws IOException {
-            this(gapFactor, centerBasedMarks, false);
+            this(gapFactor, centerBasedMarks, false, false);
         }
 
         PositionRtlStripper(
                 float gapFactor, boolean centerBasedMarks,
                 boolean explicitSpacesOnly) throws IOException {
+            this(gapFactor, centerBasedMarks, explicitSpacesOnly, false);
+        }
+
+        PositionRtlStripper(
+                float gapFactor, boolean centerBasedMarks,
+                boolean explicitSpacesOnly, boolean pdfBoxLikeSpacing)
+                throws IOException {
             super();
             this.gapFactor = gapFactor;
             this.centerBasedMarks = centerBasedMarks;
             this.explicitSpacesOnly = explicitSpacesOnly;
+            this.pdfBoxLikeSpacing = pdfBoxLikeSpacing;
         }
 
         @Override
@@ -283,12 +306,23 @@ public class MainActivity extends Activity {
             class Glyph {
                 float x;
                 float width;
+                float spaceWidth;
+                int charCount;
                 String unicode;
 
                 Glyph(TextPosition p) {
                     x = p.getXDirAdj();
                     width = Math.max(0f, p.getWidthDirAdj());
-                    unicode = p.getUnicode();
+                    spaceWidth = p.getWidthOfSpace();
+                    String value = p.getUnicode();
+                    unicode = value;
+                    int[] individualWidths = p.getIndividualWidths();
+                    charCount = individualWidths == null
+                            ? 0 : individualWidths.length;
+                    if (charCount <= 0) {
+                        charCount = value == null || value.isEmpty() ? 1
+                                : Math.max(1, value.codePointCount(0, value.length()));
+                    }
                 }
             }
 
@@ -350,6 +384,9 @@ public class MainActivity extends Activity {
 
             float previousX = Float.NaN;
             float previousWidth = 0f;
+            float previousSpaceWidth = -1f;
+            float previousAverageCharWidth = -1f;
+            int previousCharCount = 1;
             boolean haveGlyph = false;
             boolean previousWasSpace = false;
 
@@ -361,9 +398,34 @@ public class MainActivity extends Activity {
                         && !previousWasSpace
                         && !g.unicode.trim().isEmpty()) {
                     float gap = previousX - (g.x + g.width);
-                    float referenceWidth = Math.max(
-                            1.0f, Math.min(previousWidth, g.width));
-                    if (gap > Math.max(2.0f, referenceWidth * gapFactor)) {
+                    boolean addSpace;
+                    if (pdfBoxLikeSpacing) {
+                        float currentAverageCharWidth =
+                                g.width / Math.max(1, g.charCount);
+                        float averageCharWidth = previousAverageCharWidth < 0f
+                                ? currentAverageCharWidth
+                                : (previousAverageCharWidth + currentAverageCharWidth) / 2f;
+                        float deltaChar = averageCharWidth * 0.3f;
+
+                        float deltaSpace;
+                        if (!(g.spaceWidth > 0f) || Float.isNaN(g.spaceWidth)) {
+                            deltaSpace = Float.MAX_VALUE;
+                        } else if (!(previousSpaceWidth > 0f)
+                                || Float.isNaN(previousSpaceWidth)) {
+                            deltaSpace = g.spaceWidth * 0.5f;
+                        } else {
+                            deltaSpace = (g.spaceWidth + previousSpaceWidth) / 2f * 0.5f;
+                        }
+                        float threshold = Math.min(deltaSpace, deltaChar);
+                        addSpace = gap > threshold;
+                        previousAverageCharWidth = averageCharWidth;
+                        previousSpaceWidth = g.spaceWidth;
+                    } else {
+                        float referenceWidth = Math.max(
+                                1.0f, Math.min(previousWidth, g.width));
+                        addSpace = gap > Math.max(2.0f, referenceWidth * gapFactor);
+                    }
+                    if (addSpace) {
                         out.append(' ');
                     }
                 }
@@ -371,6 +433,7 @@ public class MainActivity extends Activity {
                 previousX = g.x;
                 previousWidth = g.width;
                 previousWasSpace = g.unicode.trim().isEmpty();
+                previousCharCount = Math.max(1, g.charCount);
                 haveGlyph = true;
             }
             linePositions.clear();
