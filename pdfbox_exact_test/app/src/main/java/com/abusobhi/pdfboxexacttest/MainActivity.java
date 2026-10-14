@@ -559,14 +559,10 @@ public class MainActivity extends Activity {
             final String callbackText;
             final int index;
             final int positionCount;
-            final String positionSequence;
-
-            EmittedSpace(String callbackText, int index,
-                         int positionCount, String positionSequence) {
+            EmittedSpace(String callbackText, int index, int positionCount) {
                 this.callbackText = callbackText;
                 this.index = index;
                 this.positionCount = positionCount;
-                this.positionSequence = positionSequence;
             }
         }
 
@@ -582,19 +578,11 @@ public class MainActivity extends Activity {
             }
             if (text == null || text.isEmpty()) return;
 
-            StringBuilder sequence = new StringBuilder();
-            if (positions != null) {
-                for (TextPosition p : positions) {
-                    if (sequence.length() > 0) sequence.append(" | ");
-                    sequence.append(GapDiagnosticStripper.describe(p.getUnicode()));
-                }
-            }
             for (int i = 0; i < text.length(); i++) {
                 if (Character.isWhitespace(text.charAt(i))) {
                     explicitWhitespaceCount++;
                     emittedSpaces.add(new EmittedSpace(
-                            text, i, positions == null ? 0 : positions.size(),
-                            sequence.toString()));
+                            text, i, positions == null ? 0 : positions.size()));
                 }
             }
         }
@@ -627,12 +615,11 @@ public class MainActivity extends Activity {
                         Math.min(space.callbackText.length(), space.index + 1), rightEnd);
                 report.append(String.format(Locale.US,
                         "EMITTED TEXT SPACE: index=%d leftContext=%s space=U+0020 "
-                        + "rightContext=%s callbackPositions=%d positionSequence=%s\n",
+                        + "rightContext=%s callbackPositions=%d\n",
                         space.index,
                         GapDiagnosticStripper.describe(left),
                         GapDiagnosticStripper.describe(right),
-                        space.positionCount,
-                        GapDiagnosticStripper.describe(space.positionSequence)));
+                        space.positionCount));
                 printedCount++;
             }
 
