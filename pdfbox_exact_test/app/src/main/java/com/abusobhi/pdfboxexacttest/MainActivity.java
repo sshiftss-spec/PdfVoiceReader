@@ -531,10 +531,10 @@ public class MainActivity extends Activity {
     }
 
     /*
-     * Diagnostic only: asks the real PDFTextStripper which TextPositions it
-     * grouped into each output word, then checks the same adjacent glyph pairs
-     * in visual RTL order. This distinguishes a likely missing word boundary
-     * from a threshold that would split letters already grouped as one word.
+     * Diagnostic only: records explicit spaces inserted by PDFTextStripper
+     * between adjacent TextPositions in its emitted writeString text.
+     * A writeString callback may contain multiple words, so callback identity
+     * is NOT treated as word identity.
      */
     private String diagnosePdfBoxWordBoundaries(PDDocument doc) throws Exception {
         PdfBoxWordBoundaryStripper stripper = new PdfBoxWordBoundaryStripper();
@@ -549,13 +549,12 @@ public class MainActivity extends Activity {
         private static final int MAX_PRINTED = 100;
         private final StringBuilder report = new StringBuilder();
         private final List<TextPosition> line = new ArrayList<>();
-        private final Map<TextPosition, String> wordByPosition =
+        private final Map<TextPosition, Set<TextPosition>> explicitSpacePairs =
                 new IdentityHashMap<>();
-        private int wordNumber;
         private int pairCount;
         private int printedCount;
-        private int sameWordCount;
-        private int differentWordCount;
+        private int explicitSpaceCount;
+        private int noSpaceCount;
 
         PdfBoxWordBoundaryStripper() throws IOException {
             super();
@@ -564,14 +563,52 @@ public class MainActivity extends Activity {
         @Override
         protected void writeString(String text, List<TextPosition> positions)
                 throws IOException {
-            wordNumber++;
-            if (positions == null) return;
-            String label = String.format(Locale.US, "W%03d:%s",
-                    wordNumber, text == null ? "(null)" : text);
-            for (TextPosition p : positions) {
-                line.add(p);
-                wordByPosition.put(p, label);
+            if (positions == null || positions.isEmpty()) return;
+            line.addAll(positions);
+
+            // Align each glyph's Unicode with the actual string emitted by
+            // PDFTextStripper. Whitespace between consecutive glyphs is the
+            // evidence; writeString callback boundaries alone are not.
+            String emitted = text == null ? "" : text;
+            int cursor = 0;
+            TextPosition previous = null;
+            for (TextPosition current : positions) {
+                String unicode = current.getUnicode();
+                if (unicode == null || unicode.isEmpty()) continue;
+                int at = emitted.indexOf(unicode, cursor);
+                if (at < 0) {
+                    previous = current;
+                    continue;
+                }
+                if (previous != null && at > cursor
+                        && containsWhitespace(emitted.substring(cursor, at))) {
+                    addExplicitSpacePair(previous, current);
+                }
+                cursor = at + unicode.length();
+                previous = current;
             }
+        }
+
+        private static boolean containsWhitespace(String value) {
+            for (int i = 0; i < value.length(); i++) {
+                if (Character.isWhitespace(value.charAt(i))) return true;
+            }
+            return false;
+        }
+
+        private void addExplicitSpacePair(TextPosition a, TextPosition b) {
+            Set<TextPosition> aSet = explicitSpacePairs.get(a);
+            if (aSet == null) {
+                aSet = Collections.newSetFromMap(new IdentityHashMap<TextPosition, Boolean>());
+                explicitSpacePairs.put(a, aSet);
+            }
+            aSet.add(b);
+            Set<TextPosition> bSet = explicitSpacePairs.get(b);
+            if (bSet == null) {
+                bSet = Collections.newSetFromMap(new IdentityHashMap<TextPosition, Boolean>());
+                explicitSpacePairs.put(b, bSet);
+            }
+            bSet.add(a);
         }
 
         @Override
@@ -597,42 +634,36 @@ public class MainActivity extends Activity {
                 TextPosition left = glyphs.get(i + 1);
                 float gap = right.getXDirAdj()
                         - (left.getXDirAdj() + Math.max(0f, left.getWidthDirAdj()));
-                String rightWord = wordByPosition.get(right);
-                String leftWord = wordByPosition.get(left);
-                boolean sameWord = rightWord != null && rightWord.equals(leftWord);
+                Set<TextPosition> neighbors = explicitSpacePairs.get(right);
+                boolean hasOutputSpace = neighbors != null && neighbors.contains(left);
                 pairCount++;
-                if (sameWord) sameWordCount++;
-                else differentWordCount++;
+                if (hasOutputSpace) explicitSpaceCount++;
+                else noSpaceCount++;
 
-                // Report the same range where threshold disagreements appeared,
-                // plus every actual PDFBox word boundary, up to a safe limit.
-                if (printedCount < MAX_PRINTED
-                        && (gap > 2.0f || !sameWord)) {
+                if (printedCount < MAX_PRINTED && (gap > 2.0f || hasOutputSpace)) {
                     report.append(String.format(Locale.US,
-                            "R=%s %s[x=%.1f,w=%.1f] "
-                            + "L=%s %s[x=%.1f,w=%.1f] gap=%.2f PDFBoxSameWord=%s\n",
+                            "R=%s[x=%.1f,w=%.1f] L=%s[x=%.1f,w=%.1f] "
+                            + "gap=%.2f PDFBoxOutputSpace=%s\\n",
                             GapDiagnosticStripper.describe(right.getUnicode()),
-                            rightWord == null ? "(unmapped)" : rightWord,
                             right.getXDirAdj(), right.getWidthDirAdj(),
                             GapDiagnosticStripper.describe(left.getUnicode()),
-                            leftWord == null ? "(unmapped)" : leftWord,
                             left.getXDirAdj(), left.getWidthDirAdj(),
-                            gap, sameWord ? "YES" : "NO"));
+                            gap, hasOutputSpace ? "YES" : "NO"));
                     printedCount++;
                 }
             }
             line.clear();
-            wordByPosition.clear();
+            explicitSpacePairs.clear();
         }
 
         String report() {
             flushLine();
             report.append("\nAdjacent pairs checked: ").append(pairCount)
-                    .append("\nPairs inside the same PDFBox word: ").append(sameWordCount)
-                    .append("\nPairs across PDFBox word boundaries: ").append(differentWordCount)
+                    .append("\nPairs with explicit PDFBox output space: ").append(explicitSpaceCount)
+                    .append("\nPairs without explicit PDFBox output space: ").append(noSpaceCount)
                     .append("\nPairs shown: ").append(printedCount)
                     .append(" (maximum ").append(MAX_PRINTED).append(")")
-                    .append("\nNOTE: uses actual PDFTextStripper word grouping; no extraction rules changed.");
+                    .append("\nNOTE: checks emitted whitespace, not writeString grouping; diagnostic only.");
             return report.toString();
         }
     }
