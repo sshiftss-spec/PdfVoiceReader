@@ -435,22 +435,11 @@ public class MainActivity extends AppCompatActivity {
                             extractedPages[i] = splitText(pageText, 1600);
                             hasText = true;
                         } else {
-                            // Keep normal PDF text extraction as the first choice; OCR only image-only pages.
-                            try (PdfRenderer.Page renderedPage = newRenderer.openPage(i)) {
-                                int width = Math.min(1800, Math.max(1000, getResources().getDisplayMetrics().widthPixels * 2));
-                                int height = Math.max(1, (int) ((double) renderedPage.getHeight() * width / renderedPage.getWidth()));
-                                Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-                                renderedPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                                String ocrText = normalizeTextForSpeech(runOcr(bitmap));
-                                bitmap.recycle();
-                                extractedPages[i] = ocrText.isEmpty() ? new String[0] : splitText(ocrText, 1600);
-                                if (!ocrText.isEmpty()) hasText = true;
-                            } catch (Exception ocrPageError) {
-                                extractedPages[i] = new String[0];
-                            }
+                            // Scanned pages are OCRed on demand, not while the whole PDF is opening.
+                            extractedPages[i] = new String[0];
                         }
                     }
-                    if (!hasText) extractionNote = getString(R.string.no_extractable_text);
+                    // Empty text pages may be scanned pages; OCR will run when the user asks to read them.
                 } else {
                     extractionNote = getString(R.string.no_extractable_text);
                 }
@@ -791,6 +780,47 @@ public class MainActivity extends AppCompatActivity {
     private void startCurrentFromBeginning() {
         resumeCharIndex = 0;
         speechPaused = false;
+        if (chunks.length == 0 && pdfRenderer != null
+                && currentPage >= 0 && currentPage < pageChunks.length) {
+            final int requestedPage = currentPage;
+            status.setText("الصفحة ممسوحة ضوئيًا؛ جارٍ استخراج النص...");
+            new Thread(() -> {
+                Bitmap bitmap = null;
+                try (PdfRenderer.Page page = pdfRenderer.openPage(requestedPage)) {
+                    int width = Math.min(2400, Math.max(1400,
+                            getResources().getDisplayMetrics().widthPixels * 3));
+                    int height = Math.max(1, (int) ((double) page.getHeight() * width / page.getWidth()));
+                    bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+                    String text = normalizeTextForSpeech(runOcr(bitmap));
+                    String[] result = text.isEmpty() ? new String[0] : splitText(text, 1600);
+                    runOnUiThread(() -> {
+                        if (pdfRenderer == null || currentPage != requestedPage) return;
+                        pageChunks[requestedPage] = result;
+                        chunks = result;
+                        chunkIndex = 0;
+                        resumeCharIndex = 0;
+                        if (chunks.length == 0) {
+                            status.setText("لم يُعثر على نص واضح في هذه الصفحة");
+                            Toast.makeText(this, "تعذر استخراج النص من الصفحة؛ جرّب صورة أوضح.", Toast.LENGTH_LONG).show();
+                        } else {
+                            status.setText("تم استخراج النص؛ جارٍ بدء القراءة");
+                            speakRemaining();
+                        }
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(() -> {
+                        if (currentPage == requestedPage) {
+                            status.setText("تعذر استخراج النص من الصفحة");
+                            Toast.makeText(this, e.getMessage() == null ? "حدث خطأ أثناء OCR" : e.getMessage(), Toast.LENGTH_LONG).show();
+                        }
+                    });
+                } finally {
+                    if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+                }
+            }).start();
+            return;
+        }
         speakRemaining();
     }
 
