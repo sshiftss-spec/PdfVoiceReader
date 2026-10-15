@@ -29,6 +29,7 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
 
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
@@ -75,6 +76,7 @@ public class MainActivity extends AppCompatActivity {
     private TessBaseAPI tessBaseAPI;
     private volatile boolean ocrReady = false;
     private volatile boolean ocrLoading = false;
+    private File pendingPhotoFile;
     private final ActivityResultLauncher<String[]> openImage = registerForActivityResult(
             new ActivityResultContracts.OpenDocument(), uri -> {
                 if (uri != null) {
@@ -96,17 +98,56 @@ public class MainActivity extends AppCompatActivity {
                     }).start();
                 }
             });
-    private final ActivityResultLauncher<Void> takePhoto = registerForActivityResult(
-            new ActivityResultContracts.TakePicturePreview(), bitmap -> {
-                if (bitmap == null) return;
-                fileName.setText("صورة ملتقطة بالكاميرا");
-                pageImage.setImageBitmap(bitmap);
-                resetPageZoom();
+    private final ActivityResultLauncher<Uri> takePhoto = registerForActivityResult(
+            new ActivityResultContracts.TakePicture(), saved -> {
+                if (!saved || pendingPhotoFile == null || !pendingPhotoFile.exists()) {
+                    runOnUiThread(() -> status.setText("لم يتم التقاط صورة"));
+                    return;
+                }
                 new Thread(() -> {
-                    try { setStandaloneText(runOcr(bitmap), "استخراج النص من الصورة الملتقطة"); }
-                    catch (Exception e) { showOcrError(e); }
+                    Bitmap bitmap = null;
+                    try {
+                        BitmapFactory.Options bounds = new BitmapFactory.Options();
+                        bounds.inJustDecodeBounds = true;
+                        BitmapFactory.decodeFile(pendingPhotoFile.getAbsolutePath(), bounds);
+                        int sample = 1;
+                        while (Math.max(bounds.outWidth / sample, bounds.outHeight / sample) > 3000) sample *= 2;
+                        BitmapFactory.Options options = new BitmapFactory.Options();
+                        options.inSampleSize = sample;
+                        bitmap = BitmapFactory.decodeFile(pendingPhotoFile.getAbsolutePath(), options);
+                        if (bitmap == null) throw new IllegalStateException("تعذر فتح الصورة الملتقطة");
+                        Bitmap captured = bitmap;
+                        runOnUiThread(() -> {
+                            fileName.setText("صورة ملتقطة بالكاميرا");
+                            pageImage.setImageBitmap(captured);
+                            resetPageZoom();
+                            status.setText("تم التقاط الصورة؛ جارٍ استخراج النص...");
+                        });
+                        setStandaloneText(runOcr(bitmap), "استخراج النص من الصورة الملتقطة");
+                    } catch (Exception e) {
+                        showOcrError(e);
+                    } finally {
+                        if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+                        if (pendingPhotoFile != null) pendingPhotoFile.delete();
+                        pendingPhotoFile = null;
+                    }
                 }).start();
             });
+
+    private void startCameraCapture() {
+        try {
+            File cameraDir = new File(getCacheDir(), "camera");
+            if (!cameraDir.exists() && !cameraDir.mkdirs()) {
+                throw new IllegalStateException("تعذر إنشاء مجلد الصورة");
+            }
+            pendingPhotoFile = File.createTempFile("pdfvoicereader_", ".jpg", cameraDir);
+            Uri photoUri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", pendingPhotoFile);
+            takePhoto.launch(photoUri);
+        } catch (Exception e) {
+            showOcrError(e);
+        }
+    }
 
     private final ActivityResultLauncher<String[]> openPdf =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
@@ -192,7 +233,7 @@ public class MainActivity extends AppCompatActivity {
         Button openImageButton = makeButton(R.string.open_image_read, v -> openImage.launch(new String[]{"image/*"}));
         openImageButton.setContentDescription("فتح صورة لاستخراج النص العربي وقراءته");
         root.addView(openImageButton);
-        Button cameraButton = makeButton(R.string.take_photo_read, v -> takePhoto.launch(null));
+        Button cameraButton = makeButton(R.string.take_photo_read, v -> startCameraCapture());
         cameraButton.setContentDescription("التقاط صورة لصفحة وقراءة النص العربي");
         root.addView(cameraButton);
 
