@@ -3,6 +3,10 @@ package com.abusobhi.pdfvoicereader;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.BitmapFactory;
+import android.provider.MediaStore;
+import android.os.Build;
 import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
 import android.os.Bundle;
@@ -26,12 +30,19 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.FileProvider;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
 import com.tom_roush.pdfbox.text.PDFTextStripper;
 
 import java.io.InputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import com.googlecode.tesseract.android.TessBaseAPI;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
@@ -64,6 +75,110 @@ public class MainActivity extends AppCompatActivity {
     private float pageZoom = 1f;
     private float lastTouchX;
     private float lastTouchY;
+    private TessBaseAPI tessBaseAPI;
+    private volatile boolean ocrReady = false;
+    private volatile boolean ocrLoading = false;
+    private File pendingPhotoFile;
+    private final ActivityResultLauncher<String[]> openImage = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri != null) {
+                    try { getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); }
+                    catch (SecurityException ignored) {}
+                    new Thread(() -> {
+                        try (InputStream in = getContentResolver().openInputStream(uri)) {
+                            Bitmap bitmap = BitmapFactory.decodeStream(in);
+                            if (bitmap == null) throw new IllegalStateException("تعذر فتح الصورة");
+                            runOnUiThread(() -> {
+                                fileName.setText("صورة للقراءة");
+                                pageImage.setImageBitmap(bitmap);
+                                resetPageZoom();
+                                status.setText("تم فتح الصورة؛ جارٍ تجهيز قارئ النص العربي...");
+                            });
+                            String text = runOcr(bitmap);
+                            setStandaloneText(text, "استخراج النص من الصورة");
+                        } catch (Exception e) { showOcrError(e); }
+                    }).start();
+                }
+            });
+    private final ActivityResultLauncher<Uri> takePhoto = registerForActivityResult(
+            new ActivityResultContracts.TakePicture(), saved -> {
+                if (!saved || pendingPhotoFile == null || !pendingPhotoFile.exists()) {
+                    runOnUiThread(() -> status.setText("لم يتم التقاط صورة"));
+                    return;
+                }
+                new Thread(() -> {
+                    Bitmap bitmap = null;
+                    try {
+                        BitmapFactory.Options bounds = new BitmapFactory.Options();
+                        bounds.inJustDecodeBounds = true;
+                        BitmapFactory.decodeFile(pendingPhotoFile.getAbsolutePath(), bounds);
+                        int sample = 1;
+                        while (Math.max(bounds.outWidth / sample, bounds.outHeight / sample) > 3000) sample *= 2;
+                        BitmapFactory.Options options = new BitmapFactory.Options();
+                        options.inSampleSize = sample;
+                        bitmap = BitmapFactory.decodeFile(pendingPhotoFile.getAbsolutePath(), options);
+                        if (bitmap == null) throw new IllegalStateException("تعذر فتح الصورة الملتقطة");
+                        bitmap = correctImageOrientation(pendingPhotoFile, bitmap);
+                        Bitmap captured = bitmap;
+                        runOnUiThread(() -> {
+                            fileName.setText("صورة ملتقطة بالكاميرا");
+                            pageImage.setImageBitmap(captured);
+                            resetPageZoom();
+                            status.setText("تم التقاط الصورة؛ جارٍ استخراج النص...");
+                        });
+                        setStandaloneText(runOcr(bitmap), "استخراج النص من الصورة الملتقطة");
+                    } catch (Exception e) {
+                        showOcrError(e);
+                    } finally {
+                        // The ImageView keeps this bitmap for display; do not recycle it here.
+                        if (pendingPhotoFile != null) pendingPhotoFile.delete();
+                        pendingPhotoFile = null;
+                    }
+                }).start();
+            });
+
+    private Bitmap correctImageOrientation(File imageFile, Bitmap bitmap) {
+        try {
+            ExifInterface exif = new ExifInterface(imageFile.getAbsolutePath());
+            int orientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+            Matrix matrix = new Matrix();
+            switch (orientation) {
+                case ExifInterface.ORIENTATION_ROTATE_90: matrix.postRotate(90); break;
+                case ExifInterface.ORIENTATION_ROTATE_180: matrix.postRotate(180); break;
+                case ExifInterface.ORIENTATION_ROTATE_270: matrix.postRotate(270); break;
+                case ExifInterface.ORIENTATION_FLIP_HORIZONTAL: matrix.postScale(-1, 1); break;
+                case ExifInterface.ORIENTATION_FLIP_VERTICAL: matrix.postScale(1, -1); break;
+                case ExifInterface.ORIENTATION_TRANSPOSE:
+                    matrix.postRotate(90); matrix.postScale(-1, 1); break;
+                case ExifInterface.ORIENTATION_TRANSVERSE:
+                    matrix.postRotate(270); matrix.postScale(-1, 1); break;
+                default: return bitmap;
+            }
+            Bitmap corrected = Bitmap.createBitmap(bitmap, 0, 0,
+                    bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+            if (corrected != bitmap) bitmap.recycle();
+            return corrected;
+        } catch (Exception ignored) {
+            // Keep the decoded image if orientation metadata is unavailable or malformed.
+            return bitmap;
+        }
+    }
+
+    private void startCameraCapture() {
+        try {
+            File cameraDir = new File(getCacheDir(), "camera");
+            if (!cameraDir.exists() && !cameraDir.mkdirs()) {
+                throw new IllegalStateException("تعذر إنشاء مجلد الصورة");
+            }
+            pendingPhotoFile = File.createTempFile("pdfvoicereader_", ".jpg", cameraDir);
+            Uri photoUri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", pendingPhotoFile);
+            takePhoto.launch(photoUri);
+        } catch (Exception e) {
+            showOcrError(e);
+        }
+    }
 
     private final ActivityResultLauncher<String[]> openPdf =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
@@ -145,6 +260,13 @@ public class MainActivity extends AppCompatActivity {
         open.setContentDescription("فتح ملف PDF");
         open.setOnClickListener(v -> openPdf.launch(new String[]{"application/pdf"}));
         root.addView(open);
+
+        Button openImageButton = makeButton(R.string.open_image_read, v -> openImage.launch(new String[]{"image/*"}));
+        openImageButton.setContentDescription("فتح صورة لاستخراج النص العربي وقراءته");
+        root.addView(openImageButton);
+        Button cameraButton = makeButton(R.string.take_photo_read, v -> startCameraCapture());
+        cameraButton.setContentDescription("التقاط صورة لصفحة وقراءة النص العربي");
+        root.addView(cameraButton);
 
         status = new TextView(this);
         status.setText("جاهز");
@@ -330,37 +452,9 @@ public class MainActivity extends AppCompatActivity {
             if (newDescriptor == null) throw new IllegalStateException("تعذر فتح ملف PDF");
             newRenderer = new PdfRenderer(newDescriptor);
 
-            String[][] extractedPages = new String[0][];
-            String extractionNote = "";
-            try (InputStream in = getContentResolver().openInputStream(uri);
-                 PDDocument doc = in == null ? null : PDDocument.load(in)) {
-                if (doc != null) {
-                    extractedPages = new String[doc.getNumberOfPages()][];
-                    boolean hasText = false;
-                    for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                        PDFTextStripper stripper = new PDFTextStripper();
-                        stripper.setStartPage(i + 1);
-                        stripper.setEndPage(i + 1);
-                        String pageText = normalizeTextForSpeech(stripper.getText(doc));
-                        if (!pageText.isEmpty()) {
-                            extractedPages[i] = splitText(pageText, 1600);
-                            hasText = true;
-                        } else {
-                            extractedPages[i] = new String[0];
-                        }
-                    }
-                    if (!hasText) extractionNote = getString(R.string.no_extractable_text);
-                } else {
-                    extractionNote = getString(R.string.no_extractable_text);
-                }
-            } catch (Exception textError) {
-                extractionNote = getString(R.string.no_extractable_text);
-            }
-
-            final ParcelFileDescriptor readyDescriptor = newDescriptor;
-            final PdfRenderer readyRenderer = newRenderer;
-            final String[][] readyPages = extractedPages;
-            final String readyNote = extractionNote;
+            // Display the PDF immediately. Text extraction continues in the background.
+            final ParcelFileDescriptor displayDescriptor = newDescriptor;
+            final PdfRenderer displayRenderer = newRenderer;
             newDescriptor = null;
             newRenderer = null;
             runOnUiThread(() -> {
@@ -369,16 +463,67 @@ public class MainActivity extends AppCompatActivity {
                 resumeCharIndex = 0;
                 currentUtteranceId = "";
                 closePdfRenderer();
-                pdfFileDescriptor = readyDescriptor;
-                pdfRenderer = readyRenderer;
-                pageChunks = readyPages;
-                chunks = pageChunks.length > 0 ? pageChunks[0] : new String[0];
-                chunkIndex = 0;
+                pdfFileDescriptor = displayDescriptor;
+                pdfRenderer = displayRenderer;
+                pageChunks = new String[displayRenderer.getPageCount()][];
+                for (int i = 0; i < pageChunks.length; i++) pageChunks[i] = new String[0];
+                chunks = new String[0];
                 currentPage = 0;
                 showPage(0);
+                status.setText("تم فتح الملف؛ جارٍ تجهيز النص في الخلفية...");
+            });
+
+            String[][] extractedPages = new String[0][];
+            String extractionNote = "";
+            try (InputStream in = getContentResolver().openInputStream(uri);
+                 PDDocument doc = in == null ? null : PDDocument.load(in)) {
+                if (doc != null) {
+                    extractedPages = new String[doc.getNumberOfPages()][];
+                    for (int i = 0; i < extractedPages.length; i++) extractedPages[i] = new String[0];
+                    boolean hasText = false;
+                    for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                        String pageText = normalizeTextForSpeech(
+                                ArabicPdfTextStripper.extractPage(doc, i + 1));
+                        if (!pageText.isEmpty()) {
+                            extractedPages[i] = splitText(pageText, 1600);
+                            hasText = true;
+                        } else {
+                            // Scanned pages are OCRed on demand, not while the whole PDF is opening.
+                            extractedPages[i] = new String[0];
+                        }
+                    }
+                    // Empty text pages may be scanned pages; OCR will run when the user asks to read them.
+                } else {
+                    extractionNote = getString(R.string.no_extractable_text);
+                }
+            } catch (Exception textError) {
+                extractionNote = getString(R.string.no_extractable_text);
+            }
+
+            final String[][] readyPages = extractedPages;
+            final String readyNote = extractionNote;
+            runOnUiThread(() -> {
+                if (pdfRenderer == null || pdfRenderer != displayRenderer) return;
+                // Preserve any on-demand OCR that finished while PDF text extraction was running.
+                for (int i = 0; i < readyPages.length && i < pageChunks.length; i++) {
+                    if (readyPages[i] == null || readyPages[i].length == 0) {
+                        if (pageChunks[i] != null && pageChunks[i].length > 0) {
+                            readyPages[i] = pageChunks[i];
+                        } else if (readyPages[i] == null) {
+                            readyPages[i] = new String[0];
+                        }
+                    }
+                }
+                pageChunks = readyPages;
+                chunks = currentPage >= 0 && currentPage < pageChunks.length
+                        && pageChunks[currentPage] != null ? pageChunks[currentPage] : new String[0];
+                chunkIndex = 0;
+                resumeCharIndex = 0;
                 if (readyNote.isEmpty()) {
                     int totalChunks = 0;
-                    for (String[] pageParts : pageChunks) totalChunks += pageParts.length;
+                    for (String[] pageParts : pageChunks) {
+                        if (pageParts != null) totalChunks += pageParts.length;
+                    }
                     status.setText(getString(R.string.pdf_loaded, pdfRenderer.getPageCount(), totalChunks));
                 } else {
                     status.setText(getString(R.string.pdf_loaded_no_text, pdfRenderer.getPageCount()));
@@ -398,6 +543,174 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void setStandaloneText(String text, String label) {
+        String normalized = normalizeTextForSpeech(text);
+        runOnUiThread(() -> {
+            if (tts != null) tts.stop();
+            closePdfRenderer();
+            pageChunks = new String[0][];
+            chunks = normalized.isEmpty() ? new String[0] : splitText(normalized, 1600);
+            chunkIndex = 0; resumeCharIndex = 0; speechPaused = false; currentPage = 0;
+            pageCounter.setText("نص مستخرج من صورة");
+            previousPageButton.setEnabled(false); nextPageButton.setEnabled(false);
+            status.setText(normalized.isEmpty() ? "لم يُعثر على نص عربي واضح في الصورة" : "تم استخراج النص من الصورة؛ اضغط «قراءة بصوت عالٍ»");
+            if (normalized.isEmpty()) Toast.makeText(this, "لم يتمكن OCR من قراءة نص واضح. جرّب صورة أوضح وإضاءة أفضل.", Toast.LENGTH_LONG).show();
+        });
+    }
+
+    private void showOcrError(Exception e) {
+        runOnUiThread(() -> {
+            status.setText("تعذر استخراج النص من الصورة");
+            Toast.makeText(this, e.getMessage() == null ? "تعذر تشغيل التعرف الضوئي على الحروف العربية" : e.getMessage(), Toast.LENGTH_LONG).show();
+        });
+    }
+
+    private String runOcr(Bitmap bitmap) throws Exception {
+        ensureArabicOcrReady();
+        runOnUiThread(() -> status.setText("تم تجهيز OCR العربي؛ جارٍ استخراج النص ومراجعة الأرقام..."));
+        synchronized (this) {
+            if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
+            Bitmap enlarged = null;
+            try {
+                // First pass prioritizes the original image so Arabic text remains natural.
+                tessBaseAPI.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+                tessBaseAPI.setImage(bitmap);
+                String original = tessBaseAPI.getUTF8Text();
+                original = original == null ? "" : original;
+                tessBaseAPI.clear();
+
+                // A 2x filtered image can help Tesseract distinguish small digits,
+                // decimal/separator marks, and date/time punctuation.
+                int maxDimension = Math.max(bitmap.getWidth(), bitmap.getHeight());
+                float scale = maxDimension < 1800 ? 2.0f : (maxDimension < 2800 ? 1.5f : 1.0f);
+                if (scale <= 1.0f) return original;
+                int width = Math.max(1, Math.round(bitmap.getWidth() * scale));
+                int height = Math.max(1, Math.round(bitmap.getHeight() * scale));
+                enlarged = Bitmap.createScaledBitmap(bitmap, width, height, true);
+                tessBaseAPI.setImage(enlarged);
+                String enlargedText = tessBaseAPI.getUTF8Text();
+                enlargedText = enlargedText == null ? "" : enlargedText;
+                tessBaseAPI.clear();
+
+                // Keep the original Arabic pass unless the enlarged pass provides
+                // materially stronger numeric/date-time evidence.
+                return numericOcrScore(enlargedText) > numericOcrScore(original) + 1
+                        ? enlargedText : original;
+            } finally {
+                tessBaseAPI.clear();
+                if (enlarged != null && enlarged != bitmap && !enlarged.isRecycled()) enlarged.recycle();
+            }
+        }
+    }
+
+    private int numericOcrScore(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        int score = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= '0' && c <= '9') || (c >= 1632 && c <= 1641)
+                    || (c >= 1776 && c <= 1785)) score++;
+        }
+        // Favor candidates retaining date/time separators alongside their digits.
+        if (text.matches("(?s).*\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}.*")) score += 5;
+        if (text.matches("(?s).*\\d{1,2}:\\d{2}(:\\d{2})?.*")) score += 4;
+        return score;
+    }
+
+    private void ensureArabicOcrReady() throws Exception {
+        if (ocrReady) return;
+        synchronized (this) {
+            if (ocrReady) return;
+            File dataDir = new File(getFilesDir(), "tesseract");
+            File tessdata = new File(dataDir, "tessdata");
+            if (!tessdata.exists() && !tessdata.mkdirs()) {
+                throw new IllegalStateException("تعذر إنشاء مجلد بيانات OCR");
+            }
+            File model = new File(tessdata, "ara.traineddata");
+
+            // Reuse a model only if Tesseract can actually initialize it.
+            TessBaseAPI api = new TessBaseAPI();
+            if (model.isFile() && model.length() > 1000000
+                    && api.init(dataDir.getAbsolutePath(), "ara", TessBaseAPI.OEM_LSTM_ONLY)) {
+                api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+                tessBaseAPI = api;
+                ocrReady = true;
+                return;
+            }
+            api.recycle();
+            if (model.exists()) model.delete();
+
+            runOnUiThread(() -> status.setText("جارٍ تنزيل بيانات OCR العربية لأول مرة…"));
+            File temporaryModel = new File(tessdata, "ara.traineddata.download");
+            if (temporaryModel.exists()) temporaryModel.delete();
+            String[] modelUrls = new String[] {
+                    "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/ara.traineddata",
+                    "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata"
+            };
+            String lastDownloadError = "لا يوجد اتصال متاح بمصادر بيانات OCR";
+            boolean downloaded = false;
+            for (String modelUrl : modelUrls) {
+                HttpURLConnection connection = null;
+                try {
+                    if (temporaryModel.exists()) temporaryModel.delete();
+                    connection = (HttpURLConnection) new URL(modelUrl).openConnection();
+                    connection.setInstanceFollowRedirects(true);
+                    connection.setConnectTimeout(20000);
+                    connection.setReadTimeout(60000);
+                    connection.setRequestProperty("User-Agent", "PdfVoiceReader-Android");
+                    int responseCode = connection.getResponseCode();
+                    if (responseCode != HttpURLConnection.HTTP_OK) {
+                        throw new java.io.IOException("HTTP " + responseCode);
+                    }
+                    try (InputStream in = connection.getInputStream();
+                         FileOutputStream out = new FileOutputStream(temporaryModel)) {
+                        byte[] buffer = new byte[16384];
+                        int count;
+                        while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                        out.getFD().sync();
+                    }
+                    if (temporaryModel.isFile() && temporaryModel.length() >= 1000000) {
+                        downloaded = true;
+                        break;
+                    }
+                    lastDownloadError = "الملف الذي وصل غير مكتمل";
+                } catch (Exception downloadError) {
+                    lastDownloadError = downloadError.getMessage() == null
+                            ? downloadError.getClass().getSimpleName()
+                            : downloadError.getMessage();
+                } finally {
+                    if (connection != null) connection.disconnect();
+                }
+            }
+            if (!downloaded) {
+                temporaryModel.delete();
+                throw new IllegalStateException(
+                        "تعذر تنزيل نموذج OCR العربي من المصدرين. تحقق من الإنترنت ثم أعد المحاولة. التفاصيل: "
+                                + lastDownloadError);
+            }
+
+            if (!temporaryModel.isFile() || temporaryModel.length() < 1000000) {
+                temporaryModel.delete();
+                throw new IllegalStateException("نموذج OCR العربي الذي تم تنزيله غير مكتمل؛ أعد المحاولة مع اتصال مستقر.");
+            }
+            if (!temporaryModel.renameTo(model)) {
+                temporaryModel.delete();
+                throw new IllegalStateException("تعذر حفظ نموذج OCR العربي على الهاتف.");
+            }
+
+            api = new TessBaseAPI();
+            if (!api.init(dataDir.getAbsolutePath(), "ara", TessBaseAPI.OEM_LSTM_ONLY)) {
+                api.recycle();
+                model.delete();
+                throw new IllegalStateException("تم تنزيل نموذج OCR لكن تعذرت تهيئته؛ أعد المحاولة.");
+            }
+            api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+            tessBaseAPI = api;
+            ocrReady = true;
+            runOnUiThread(() -> status.setText("تم تجهيز OCR العربي"));
+        }
+    }
+
     private String normalizeTextForSpeech(String rawText) {
         if (rawText == null || rawText.trim().isEmpty()) return "";
         String text = rawText.replace("\r\n", "\n").replace('\r', '\n');
@@ -406,6 +719,7 @@ public class MainActivity extends AppCompatActivity {
         boolean previousLineWasBlank = false;
         for (String line : lines) {
             String cleaned = line.replaceAll("[\\t ]+", " ").trim();
+            if (isPdfFooterLine(cleaned)) continue;
             if (cleaned.isEmpty()) {
                 if (normalized.length() > 0 && !previousLineWasBlank) {
                     normalized.append("\n\n");
@@ -421,7 +735,32 @@ public class MainActivity extends AppCompatActivity {
                 previousLineWasBlank = false;
             }
         }
-        return normalized.toString().replaceAll(" *\\n\\n *", "\n\n").trim();
+        // ArabicPdfTextStripper places rotated margin headings before the body.
+        return normalized.toString().replaceAll(" *\\n\\n *", "\\n\\n").trim();
+    }
+
+
+    private boolean isPdfFooterLine(String line) {
+        if (line == null || line.isEmpty()) return false;
+        // Compare without Arabic vowel marks or tatweel so both printed and
+        // extracted variants of the footer are recognized.
+        String key = line
+                .replaceAll("[\\u064B-\\u065F\\u0670\\u0640]", "")
+                .replace('أ', 'ا')
+                .replace('إ', 'ا')
+                .replace('آ', 'ا')
+                .replaceAll("[\\t ]+", " ")
+                .trim();
+        boolean hasIndexPrompt = key.contains("اضغط للعودة للفهرس");
+        boolean hasAuthorCredit = key.contains("بواسطة")
+                && key.contains("المقداد حمدي");
+        boolean hasPublishingFooter = key.contains("النشر والتوزيع");
+        boolean hasFortyHadithTitle = key.contains("الاربعين النووية");
+        // The title appears in this PDF's page footer. Drop it when it is a
+        // footer by itself or alongside either of the other footer labels.
+        return hasIndexPrompt || hasAuthorCredit || hasPublishingFooter
+                || (hasFortyHadithTitle
+                    && (key.length() < 45 || hasIndexPrompt || key.contains("بواسطة")));
     }
 
     private String[] splitText(String text, int max) {
@@ -496,6 +835,47 @@ public class MainActivity extends AppCompatActivity {
     private void startCurrentFromBeginning() {
         resumeCharIndex = 0;
         speechPaused = false;
+        if (chunks.length == 0 && pdfRenderer != null
+                && currentPage >= 0 && currentPage < pageChunks.length) {
+            final int requestedPage = currentPage;
+            status.setText("الصفحة ممسوحة ضوئيًا؛ جارٍ استخراج النص...");
+            new Thread(() -> {
+                Bitmap bitmap = null;
+                try (PdfRenderer.Page page = pdfRenderer.openPage(requestedPage)) {
+                    int width = Math.min(2400, Math.max(1400,
+                            getResources().getDisplayMetrics().widthPixels * 3));
+                    int height = Math.max(1, (int) ((double) page.getHeight() * width / page.getWidth()));
+                    bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+                    String text = normalizeTextForSpeech(runOcr(bitmap));
+                    String[] result = text.isEmpty() ? new String[0] : splitText(text, 1600);
+                    runOnUiThread(() -> {
+                        if (pdfRenderer == null || currentPage != requestedPage) return;
+                        pageChunks[requestedPage] = result;
+                        chunks = result;
+                        chunkIndex = 0;
+                        resumeCharIndex = 0;
+                        if (chunks.length == 0) {
+                            status.setText("لم يُعثر على نص واضح في هذه الصفحة");
+                            Toast.makeText(this, "تعذر استخراج النص من الصفحة؛ جرّب صورة أوضح.", Toast.LENGTH_LONG).show();
+                        } else {
+                            status.setText("تم استخراج النص؛ جارٍ بدء القراءة");
+                            speakRemaining();
+                        }
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(() -> {
+                        if (currentPage == requestedPage) {
+                            status.setText("تعذر استخراج النص من الصفحة");
+                            Toast.makeText(this, e.getMessage() == null ? "حدث خطأ أثناء OCR" : e.getMessage(), Toast.LENGTH_LONG).show();
+                        }
+                    });
+                } finally {
+                    if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+                }
+            }).start();
+            return;
+        }
         speakRemaining();
     }
 
@@ -569,6 +949,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onDestroy() {
         if (tts != null) { tts.stop(); tts.shutdown(); }
         closePdfRenderer();
+        if (tessBaseAPI != null) { tessBaseAPI.recycle(); tessBaseAPI = null; }
         super.onDestroy();
     }
 }
