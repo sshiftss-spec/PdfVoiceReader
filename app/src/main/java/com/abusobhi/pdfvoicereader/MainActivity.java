@@ -552,7 +552,7 @@ public class MainActivity extends AppCompatActivity {
                 ocrReady = true;
                 return;
             }
-            api.end();
+            api.recycle();
             if (model.exists()) model.delete();
 
             runOnUiThread(() -> status.setText("جارٍ تنزيل بيانات OCR العربية لأول مرة…"));
@@ -615,7 +615,7 @@ public class MainActivity extends AppCompatActivity {
 
             api = new TessBaseAPI();
             if (!api.init(dataDir.getAbsolutePath(), "ara", TessBaseAPI.OEM_LSTM_ONLY)) {
-                api.end();
+                api.recycle();
                 model.delete();
                 throw new IllegalStateException("تم تنزيل نموذج OCR لكن تعذرت تهيئته؛ أعد المحاولة.");
             }
@@ -823,7 +823,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onDestroy() {
         if (tts != null) { tts.stop(); tts.shutdown(); }
         closePdfRenderer();
-        if (tessBaseAPI != null) { tessBaseAPI.end(); tessBaseAPI = null; }
+        if (tessBaseAPI != null) { tessBaseAPI.recycle(); tessBaseAPI = null; }
         super.onDestroy();
     }
 }
