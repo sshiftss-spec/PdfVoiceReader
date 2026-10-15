@@ -521,26 +521,14 @@ public class MainActivity extends AppCompatActivity {
     private int numericOcrScore(String text) {
         if (text == null || text.isEmpty()) return 0;
         int score = 0;
-        int digitCount = 0;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if ((c >= '0' && c <= '9') || (c >= '\\u0660' && c <= '\\u0669')
-                    || (c >= '\\u06F0' && c <= '\\u06F9')) digitCount++;
+            if ((c >= '0' && c <= '9') || (c >= 1632 && c <= 1641)
+                    || (c >= 1776 && c <= 1785)) score++;
         }
-        score += digitCount;
-        // Reward plausible date/time/identifier groupings, not arbitrary punctuation.
-        java.util.regex.Matcher date = java.util.regex.Pattern
-                .compile("(?<!\\\\d)\\\\d{1,2}[/.-]\\\\d{1,2}[/.-]\\\\d{2,4}(?!\\\\d)")
-                .matcher(text);
-        while (date.find()) score += 5;
-        java.util.regex.Matcher time = java.util.regex.Pattern
-                .compile("(?<!\\\\d)\\\\d{1,2}:\\\\d{2}(?::\\\\d{2})?(?!\\\\d)")
-                .matcher(text);
-        while (time.find()) score += 4;
-        java.util.regex.Matcher grouped = java.util.regex.Pattern
-                .compile("(?<!\\\\d)\\\\d{6,}(?!\\\\d)")
-                .matcher(text);
-        while (grouped.find()) score += 2;
+        // Favor candidates retaining date/time separators alongside their digits.
+        if (text.matches("(?s).*\\d{1,2}[/.-]\\d{1,2}[/.-]\\d{2,4}.*")) score += 5;
+        if (text.matches("(?s).*\\d{1,2}:\\d{2}(:\\d{2})?.*")) score += 4;
         return score;
     }
 
