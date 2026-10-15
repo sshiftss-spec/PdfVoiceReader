@@ -558,33 +558,50 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> status.setText("جارٍ تنزيل بيانات OCR العربية لأول مرة…"));
             File temporaryModel = new File(tessdata, "ara.traineddata.download");
             if (temporaryModel.exists()) temporaryModel.delete();
-            HttpURLConnection connection = null;
-            try {
-                connection = (HttpURLConnection) new URL(
-                        "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata")
-                        .openConnection();
-                connection.setInstanceFollowRedirects(true);
-                connection.setConnectTimeout(25000);
-                connection.setReadTimeout(60000);
-                connection.setRequestProperty("User-Agent", "PdfVoiceReader-Android");
-                int responseCode = connection.getResponseCode();
-                if (responseCode != HttpURLConnection.HTTP_OK) {
-                    throw new java.io.IOException("فشل تنزيل نموذج OCR (HTTP " + responseCode + ")");
+            String[] modelUrls = new String[] {
+                    "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/ara.traineddata",
+                    "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata"
+            };
+            String lastDownloadError = "لا يوجد اتصال متاح بمصادر بيانات OCR";
+            boolean downloaded = false;
+            for (String modelUrl : modelUrls) {
+                HttpURLConnection connection = null;
+                try {
+                    if (temporaryModel.exists()) temporaryModel.delete();
+                    connection = (HttpURLConnection) new URL(modelUrl).openConnection();
+                    connection.setInstanceFollowRedirects(true);
+                    connection.setConnectTimeout(20000);
+                    connection.setReadTimeout(60000);
+                    connection.setRequestProperty("User-Agent", "PdfVoiceReader-Android");
+                    int responseCode = connection.getResponseCode();
+                    if (responseCode != HttpURLConnection.HTTP_OK) {
+                        throw new java.io.IOException("HTTP " + responseCode);
+                    }
+                    try (InputStream in = connection.getInputStream();
+                         FileOutputStream out = new FileOutputStream(temporaryModel)) {
+                        byte[] buffer = new byte[16384];
+                        int count;
+                        while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                        out.getFD().sync();
+                    }
+                    if (temporaryModel.isFile() && temporaryModel.length() >= 1000000) {
+                        downloaded = true;
+                        break;
+                    }
+                    lastDownloadError = "الملف الذي وصل غير مكتمل";
+                } catch (Exception downloadError) {
+                    lastDownloadError = downloadError.getMessage() == null
+                            ? downloadError.getClass().getSimpleName()
+                            : downloadError.getMessage();
+                } finally {
+                    if (connection != null) connection.disconnect();
                 }
-                try (InputStream in = connection.getInputStream();
-                     FileOutputStream out = new FileOutputStream(temporaryModel)) {
-                    byte[] buffer = new byte[16384];
-                    int count;
-                    while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-                    out.getFD().sync();
-                }
-            } catch (Exception downloadError) {
+            }
+            if (!downloaded) {
                 temporaryModel.delete();
                 throw new IllegalStateException(
-                        "تعذر تنزيل نموذج OCR العربي. تحقق من اتصال الإنترنت ثم أعد المحاولة. التفاصيل: "
-                                + downloadError.getMessage(), downloadError);
-            } finally {
-                if (connection != null) connection.disconnect();
+                        "تعذر تنزيل نموذج OCR العربي من المصدرين. تحقق من الإنترنت ثم أعد المحاولة. التفاصيل: "
+                                + lastDownloadError);
             }
 
             if (!temporaryModel.isFile() || temporaryModel.length() < 1000000) {
