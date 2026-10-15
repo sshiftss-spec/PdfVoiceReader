@@ -338,10 +338,8 @@ public class MainActivity extends AppCompatActivity {
                     extractedPages = new String[doc.getNumberOfPages()][];
                     boolean hasText = false;
                     for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                        PDFTextStripper stripper = new PDFTextStripper();
-                        stripper.setStartPage(i + 1);
-                        stripper.setEndPage(i + 1);
-                        String pageText = normalizeTextForSpeech(stripper.getText(doc));
+                        String pageText = normalizeTextForSpeech(
+                                ArabicPdfTextStripper.extractPage(doc, i + 1));
                         if (!pageText.isEmpty()) {
                             extractedPages[i] = splitText(pageText, 1600);
                             hasText = true;
@@ -406,6 +404,7 @@ public class MainActivity extends AppCompatActivity {
         boolean previousLineWasBlank = false;
         for (String line : lines) {
             String cleaned = line.replaceAll("[\\t ]+", " ").trim();
+            if (isPdfFooterLine(cleaned)) continue;
             if (cleaned.isEmpty()) {
                 if (normalized.length() > 0 && !previousLineWasBlank) {
                     normalized.append("\n\n");
@@ -421,7 +420,32 @@ public class MainActivity extends AppCompatActivity {
                 previousLineWasBlank = false;
             }
         }
-        return normalized.toString().replaceAll(" *\\n\\n *", "\n\n").trim();
+        // ArabicPdfTextStripper places rotated margin headings before the body.
+        return normalized.toString().replaceAll(" *\\n\\n *", "\\n\\n").trim();
+    }
+
+
+    private boolean isPdfFooterLine(String line) {
+        if (line == null || line.isEmpty()) return false;
+        // Compare without Arabic vowel marks or tatweel so both printed and
+        // extracted variants of the footer are recognized.
+        String key = line
+                .replaceAll("[\\u064B-\\u065F\\u0670\\u0640]", "")
+                .replace('أ', 'ا')
+                .replace('إ', 'ا')
+                .replace('آ', 'ا')
+                .replaceAll("[\\t ]+", " ")
+                .trim();
+        boolean hasIndexPrompt = key.contains("اضغط للعودة للفهرس");
+        boolean hasAuthorCredit = key.contains("بواسطة")
+                && key.contains("المقداد حمدي");
+        boolean hasPublishingFooter = key.contains("النشر والتوزيع");
+        boolean hasFortyHadithTitle = key.contains("الاربعين النووية");
+        // The title appears in this PDF's page footer. Drop it when it is a
+        // footer by itself or alongside either of the other footer labels.
+        return hasIndexPrompt || hasAuthorCredit || hasPublishingFooter
+                || (hasFortyHadithTitle
+                    && (key.length() < 45 || hasIndexPrompt || key.contains("بواسطة")));
     }
 
     private String[] splitText(String text, int max) {
