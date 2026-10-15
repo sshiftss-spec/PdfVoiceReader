@@ -482,17 +482,66 @@ public class MainActivity extends AppCompatActivity {
 
     private String runOcr(Bitmap bitmap) throws Exception {
         ensureArabicOcrReady();
-        runOnUiThread(() -> status.setText("تم تجهيز OCR العربي؛ جارٍ استخراج النص من الصورة..."));
+        runOnUiThread(() -> status.setText("تم تجهيز OCR العربي؛ جارٍ استخراج النص ومراجعة الأرقام..."));
         synchronized (this) {
             if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
+            Bitmap enlarged = null;
             try {
+                // First pass prioritizes the original image so Arabic text remains natural.
+                tessBaseAPI.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
                 tessBaseAPI.setImage(bitmap);
-                String result = tessBaseAPI.getUTF8Text();
-                return result == null ? "" : result;
+                String original = tessBaseAPI.getUTF8Text();
+                original = original == null ? "" : original;
+                tessBaseAPI.clear();
+
+                // A 2x filtered image can help Tesseract distinguish small digits,
+                // decimal/separator marks, and date/time punctuation.
+                int maxDimension = Math.max(bitmap.getWidth(), bitmap.getHeight());
+                float scale = maxDimension < 1800 ? 2.0f : (maxDimension < 2800 ? 1.5f : 1.0f);
+                if (scale <= 1.0f) return original;
+                int width = Math.max(1, Math.round(bitmap.getWidth() * scale));
+                int height = Math.max(1, Math.round(bitmap.getHeight() * scale));
+                enlarged = Bitmap.createScaledBitmap(bitmap, width, height, true);
+                tessBaseAPI.setImage(enlarged);
+                String enlargedText = tessBaseAPI.getUTF8Text();
+                enlargedText = enlargedText == null ? "" : enlargedText;
+                tessBaseAPI.clear();
+
+                // Keep the original Arabic pass unless the enlarged pass provides
+                // materially stronger numeric/date-time evidence.
+                return numericOcrScore(enlargedText) > numericOcrScore(original) + 1
+                        ? enlargedText : original;
             } finally {
                 tessBaseAPI.clear();
+                if (enlarged != null && enlarged != bitmap && !enlarged.isRecycled()) enlarged.recycle();
             }
         }
+    }
+
+    private int numericOcrScore(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        int score = 0;
+        int digitCount = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= '0' && c <= '9') || (c >= '\\u0660' && c <= '\\u0669')
+                    || (c >= '\\u06F0' && c <= '\\u06F9')) digitCount++;
+        }
+        score += digitCount;
+        // Reward plausible date/time/identifier groupings, not arbitrary punctuation.
+        java.util.regex.Matcher date = java.util.regex.Pattern
+                .compile("(?<!\\\\d)\\\\d{1,2}[/.-]\\\\d{1,2}[/.-]\\\\d{2,4}(?!\\\\d)")
+                .matcher(text);
+        while (date.find()) score += 5;
+        java.util.regex.Matcher time = java.util.regex.Pattern
+                .compile("(?<!\\\\d)\\\\d{1,2}:\\\\d{2}(?::\\\\d{2})?(?!\\\\d)")
+                .matcher(text);
+        while (time.find()) score += 4;
+        java.util.regex.Matcher grouped = java.util.regex.Pattern
+                .compile("(?<!\\\\d)\\\\d{6,}(?!\\\\d)")
+                .matcher(text);
+        while (grouped.find()) score += 2;
+        return score;
     }
 
     private void ensureArabicOcrReady() throws Exception {
