@@ -546,7 +546,7 @@ public class MainActivity extends AppCompatActivity {
             // Reuse a model only if Tesseract can actually initialize it.
             TessBaseAPI api = new TessBaseAPI();
             if (model.isFile() && model.length() > 1000000
-                    && api.init(dataDir.getAbsolutePath(), "ara")) {
+                    && api.init(dataDir.getAbsolutePath(), "ara", TessBaseAPI.OEM_LSTM_ONLY)) {
                 api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
                 tessBaseAPI = api;
                 ocrReady = true;
@@ -614,7 +614,7 @@ public class MainActivity extends AppCompatActivity {
             }
 
             api = new TessBaseAPI();
-            if (!api.init(dataDir.getAbsolutePath(), "ara")) {
+            if (!api.init(dataDir.getAbsolutePath(), "ara", TessBaseAPI.OEM_LSTM_ONLY)) {
                 api.end();
                 model.delete();
                 throw new IllegalStateException("تم تنزيل نموذج OCR لكن تعذرت تهيئته؛ أعد المحاولة.");
