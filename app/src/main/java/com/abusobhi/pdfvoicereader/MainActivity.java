@@ -452,6 +452,26 @@ public class MainActivity extends AppCompatActivity {
             if (newDescriptor == null) throw new IllegalStateException("تعذر فتح ملف PDF");
             newRenderer = new PdfRenderer(newDescriptor);
 
+            // Display the PDF immediately. Text extraction continues in the background.
+            final ParcelFileDescriptor displayDescriptor = newDescriptor;
+            final PdfRenderer displayRenderer = newRenderer;
+            newDescriptor = null;
+            newRenderer = null;
+            runOnUiThread(() -> {
+                if (tts != null) tts.stop();
+                speechPaused = false;
+                resumeCharIndex = 0;
+                currentUtteranceId = "";
+                closePdfRenderer();
+                pdfFileDescriptor = displayDescriptor;
+                pdfRenderer = displayRenderer;
+                pageChunks = new String[displayRenderer.getPageCount()][];
+                chunks = new String[0];
+                currentPage = 0;
+                showPage(0);
+                status.setText("تم فتح الملف؛ جارٍ تجهيز النص في الخلفية...");
+            });
+
             String[][] extractedPages = new String[0][];
             String extractionNote = "";
             try (InputStream in = getContentResolver().openInputStream(uri);
@@ -478,28 +498,20 @@ public class MainActivity extends AppCompatActivity {
                 extractionNote = getString(R.string.no_extractable_text);
             }
 
-            final ParcelFileDescriptor readyDescriptor = newDescriptor;
-            final PdfRenderer readyRenderer = newRenderer;
             final String[][] readyPages = extractedPages;
             final String readyNote = extractionNote;
-            newDescriptor = null;
-            newRenderer = null;
             runOnUiThread(() -> {
-                if (tts != null) tts.stop();
-                speechPaused = false;
-                resumeCharIndex = 0;
-                currentUtteranceId = "";
-                closePdfRenderer();
-                pdfFileDescriptor = readyDescriptor;
-                pdfRenderer = readyRenderer;
+                if (pdfRenderer == null || pdfRenderer != displayRenderer) return;
                 pageChunks = readyPages;
-                chunks = pageChunks.length > 0 ? pageChunks[0] : new String[0];
+                chunks = currentPage >= 0 && currentPage < pageChunks.length
+                        && pageChunks[currentPage] != null ? pageChunks[currentPage] : new String[0];
                 chunkIndex = 0;
-                currentPage = 0;
-                showPage(0);
+                resumeCharIndex = 0;
                 if (readyNote.isEmpty()) {
                     int totalChunks = 0;
-                    for (String[] pageParts : pageChunks) totalChunks += pageParts.length;
+                    for (String[] pageParts : pageChunks) {
+                        if (pageParts != null) totalChunks += pageParts.length;
+                    }
                     status.setText(getString(R.string.pdf_loaded, pdfRenderer.getPageCount(), totalChunks));
                 } else {
                     status.setText(getString(R.string.pdf_loaded_no_text, pdfRenderer.getPageCount()));
