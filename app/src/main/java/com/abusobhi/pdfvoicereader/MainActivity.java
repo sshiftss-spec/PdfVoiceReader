@@ -127,7 +127,7 @@ public class MainActivity extends AppCompatActivity {
                     } catch (Exception e) {
                         showOcrError(e);
                     } finally {
-                        if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+                        // The ImageView keeps this bitmap for display; do not recycle it here.
                         if (pendingPhotoFile != null) pendingPhotoFile.delete();
                         pendingPhotoFile = null;
                     }
