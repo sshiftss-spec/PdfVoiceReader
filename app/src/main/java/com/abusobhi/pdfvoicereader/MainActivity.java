@@ -3,6 +3,7 @@ package com.abusobhi.pdfvoicereader;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.BitmapFactory;
 import android.provider.MediaStore;
 import android.os.Build;
@@ -30,6 +31,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
@@ -116,6 +118,7 @@ public class MainActivity extends AppCompatActivity {
                         options.inSampleSize = sample;
                         bitmap = BitmapFactory.decodeFile(pendingPhotoFile.getAbsolutePath(), options);
                         if (bitmap == null) throw new IllegalStateException("تعذر فتح الصورة الملتقطة");
+                        bitmap = correctImageOrientation(pendingPhotoFile, bitmap);
                         Bitmap captured = bitmap;
                         runOnUiThread(() -> {
                             fileName.setText("صورة ملتقطة بالكاميرا");
@@ -133,6 +136,34 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }).start();
             });
+
+    private Bitmap correctImageOrientation(File imageFile, Bitmap bitmap) {
+        try {
+            ExifInterface exif = new ExifInterface(imageFile.getAbsolutePath());
+            int orientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+            Matrix matrix = new Matrix();
+            switch (orientation) {
+                case ExifInterface.ORIENTATION_ROTATE_90: matrix.postRotate(90); break;
+                case ExifInterface.ORIENTATION_ROTATE_180: matrix.postRotate(180); break;
+                case ExifInterface.ORIENTATION_ROTATE_270: matrix.postRotate(270); break;
+                case ExifInterface.ORIENTATION_FLIP_HORIZONTAL: matrix.postScale(-1, 1); break;
+                case ExifInterface.ORIENTATION_FLIP_VERTICAL: matrix.postScale(1, -1); break;
+                case ExifInterface.ORIENTATION_TRANSPOSE:
+                    matrix.postRotate(90); matrix.postScale(-1, 1); break;
+                case ExifInterface.ORIENTATION_TRANSVERSE:
+                    matrix.postRotate(270); matrix.postScale(-1, 1); break;
+                default: return bitmap;
+            }
+            Bitmap corrected = Bitmap.createBitmap(bitmap, 0, 0,
+                    bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+            if (corrected != bitmap) bitmap.recycle();
+            return corrected;
+        } catch (Exception ignored) {
+            // Keep the decoded image if orientation metadata is unavailable or malformed.
+            return bitmap;
+        }
+    }
 
     private void startCameraCapture() {
         try {
