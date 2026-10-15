@@ -504,6 +504,16 @@ public class MainActivity extends AppCompatActivity {
             final String readyNote = extractionNote;
             runOnUiThread(() -> {
                 if (pdfRenderer == null || pdfRenderer != displayRenderer) return;
+                // Preserve any on-demand OCR that finished while PDF text extraction was running.
+                for (int i = 0; i < readyPages.length && i < pageChunks.length; i++) {
+                    if (readyPages[i] == null || readyPages[i].length == 0) {
+                        if (pageChunks[i] != null && pageChunks[i].length > 0) {
+                            readyPages[i] = pageChunks[i];
+                        } else if (readyPages[i] == null) {
+                            readyPages[i] = new String[0];
+                        }
+                    }
+                }
                 pageChunks = readyPages;
                 chunks = currentPage >= 0 && currentPage < pageChunks.length
                         && pageChunks[currentPage] != null ? pageChunks[currentPage] : new String[0];
