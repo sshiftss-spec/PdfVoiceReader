@@ -487,22 +487,65 @@ public class MainActivity extends AppCompatActivity {
 
     private String runOcr(Bitmap bitmap) throws Exception {
         ensureArabicOcrReady();
-        runOnUiThread(() -> status.setText("تم تجهيز OCR العربي؛ جارٍ استخراج النص من الصورة..."));
+        runOnUiThread(() -> status.setText("جارٍ تحليل تخطيط الصورة واختيار أفضل قراءة..."));
         synchronized (this) {
             if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
 
-            // First pass keeps the original pixels. The second pass uses a
-            // lightly enhanced, resized copy to recover small or faint Arabic text.
-            String originalText = recognizeBitmap(bitmap);
+            // Try multiple page-layout modes. Receipts and transfer notices often
+            // have labels on one side and values on the other; a single layout
+            // mode can incorrectly read the two columns separately.
+            String bestText = "";
+            int bestScore = Integer.MIN_VALUE;
             Bitmap enhanced = prepareOcrBitmap(bitmap);
+            Bitmap[] candidates = enhanced == bitmap
+                    ? new Bitmap[]{bitmap}
+                    : new Bitmap[]{bitmap, enhanced};
             try {
-                String enhancedText = recognizeBitmap(enhanced);
-                return ocrTextScore(enhancedText) > ocrTextScore(originalText)
-                        ? enhancedText : originalText;
+                for (Bitmap candidate : candidates) {
+                    int[] modes = {
+                            TessBaseAPI.PageSegMode.PSM_AUTO,
+                            TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK,
+                            TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT
+                    };
+                    for (int mode : modes) {
+                        tessBaseAPI.setPageSegMode(mode);
+                        String text = recognizeBitmap(candidate);
+                        int score = ocrTextScore(text) + receiptLayoutBonus(text);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestText = text;
+                        }
+                    }
+                }
             } finally {
+                tessBaseAPI.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
                 if (enhanced != bitmap && !enhanced.isRecycled()) enhanced.recycle();
             }
+            return bestText;
         }
+    }
+
+    // Prefer OCR outputs that keep receipt labels and their values together
+    // on individual lines, without rewriting or guessing any extracted data.
+    private int receiptLayoutBonus(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        String[] labels = {
+                "اسم المرسل", "اسم المستلم", "حساب المرسل", "حساب المستلم",
+                "رقم العملية", "تاريخ العملية", "المبلغ", "الملاحظة", "العملية"
+        };
+        int bonus = 0;
+        for (String line : text.split("\\n")) {
+            String compact = line.replaceAll("[\\\\t ]+", " ").trim();
+            int found = 0;
+            for (String label : labels) {
+                if (compact.contains(label)) found++;
+            }
+            // A line with a field label and other content is more useful than
+            // a label-only line, as long as we do not invent a value.
+            if (found == 1 && compact.length() > 14) bonus += 12;
+            else if (found > 1) bonus -= 8;
+        }
+        return bonus;
     }
 
     private String recognizeBitmap(Bitmap bitmap) {
