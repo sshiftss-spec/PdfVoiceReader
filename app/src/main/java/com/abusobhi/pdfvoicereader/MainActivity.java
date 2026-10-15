@@ -466,6 +466,7 @@ public class MainActivity extends AppCompatActivity {
                 pdfFileDescriptor = displayDescriptor;
                 pdfRenderer = displayRenderer;
                 pageChunks = new String[displayRenderer.getPageCount()][];
+                for (int i = 0; i < pageChunks.length; i++) pageChunks[i] = new String[0];
                 chunks = new String[0];
                 currentPage = 0;
                 showPage(0);
@@ -478,6 +479,7 @@ public class MainActivity extends AppCompatActivity {
                  PDDocument doc = in == null ? null : PDDocument.load(in)) {
                 if (doc != null) {
                     extractedPages = new String[doc.getNumberOfPages()][];
+                    for (int i = 0; i < extractedPages.length; i++) extractedPages[i] = new String[0];
                     boolean hasText = false;
                     for (int i = 0; i < doc.getNumberOfPages(); i++) {
                         String pageText = normalizeTextForSpeech(
