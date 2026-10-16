@@ -578,7 +578,7 @@ public class MainActivity extends AppCompatActivity {
                         (c >= 0x2E00 && c <= 0x2E7F) ||
                         (c >= 0x3001 && c <= 0x303F) ||
                         "()[]{}<>«»‹›.,;:!?،؛؟٬٫".indexOf(c) >= 0 ||
-                        c == '\\'' || c == '"' || c == 0x0640;
+                        c == 0x0027 || c == 0x0022 || c == 0x0640;
                 if (arabicDiacritic || punctuationOrBracket) {
                     lineOut.append(' ');
                 } else if (c == '\t' || c == ' ') {
