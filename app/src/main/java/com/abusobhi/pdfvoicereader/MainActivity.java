@@ -519,7 +519,7 @@ public class MainActivity extends AppCompatActivity {
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
             }
             if (loadId != pdfLoadGeneration) return "";
-            return normalizeTextForSpeech(runOcr(bitmap));
+            return normalizeTextForSpeech(runPdfPageOcr(bitmap));
         } catch (Exception ocrError) {
             return "";
         } finally {
@@ -531,6 +531,66 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /** OCR policy for Arabic book pages: favor coherent block order over sparse fragments. */
+    private String runPdfPageOcr(Bitmap bitmap) throws Exception {
+        ensureArabicOcrReady();
+        synchronized (this) {
+            if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
+            Bitmap enhanced = prepareOcrBitmap(bitmap);
+            Bitmap[] candidates = enhanced == bitmap ? new Bitmap[]{bitmap} : new Bitmap[]{bitmap, enhanced};
+            String bestText = "";
+            int bestScore = Integer.MIN_VALUE;
+            try {
+                // Sparse-text mode can scramble the order of Arabic book lines.
+                int[] modes = {TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK, TessBaseAPI.PageSegMode.PSM_AUTO};
+                for (Bitmap candidate : candidates) {
+                    for (int mode : modes) {
+                        tessBaseAPI.setPageSegMode(mode);
+                        String text = cleanPdfOcrText(recognizeBitmap(candidate));
+                        int score = ocrTextScore(text) + pdfArabicQualityBonus(text);
+                        if (score > bestScore) { bestScore = score; bestText = text; }
+                    }
+                }
+            } finally {
+                tessBaseAPI.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+                if (enhanced != bitmap && !enhanced.isRecycled()) enhanced.recycle();
+            }
+            return bestText;
+        }
+    }
+
+    private String cleanPdfOcrText(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return "";
+        StringBuilder out = new StringBuilder(raw.length());
+        for (String sourceLine : raw.replace("\r", "").split("\n")) {
+            String line = sourceLine.replaceAll("[\\t ]+", " ").replaceAll("[|_~^`]+", " ").trim();
+            // Preserve Arabic vowel marks, Quranic signs, punctuation and real numbers.
+            line = line.replaceAll(" {2,}", " ").trim();
+            if (!line.isEmpty()) out.append(line).append('\n');
+        }
+        return out.toString().trim();
+    }
+
+    private int pdfArabicQualityBonus(String text) {
+        if (text == null || text.trim().isEmpty()) return -1000;
+        int arabic = 0, digits = 0, letters = 0, singleLetterTokens = 0;
+        String[] tokens = text.trim().split("\\s+");
+        for (String token : tokens) {
+            int tokenArabic = 0;
+            for (int i = 0; i < token.length(); i++) {
+                char c = token.charAt(i);
+                if (((c >= '\\u0621' && c <= '\\u064A') || (c >= '\\u066E' && c <= '\\u06D3') || (c >= '\\u0750' && c <= '\\u077F')) && Character.isLetter(c)) { arabic++; tokenArabic++; }
+                if (Character.isDigit(c) || (c >= '\\u0660' && c <= '\\u0669')) digits++;
+                if (Character.isLetter(c)) letters++;
+            }
+            if (tokenArabic == 1) singleLetterTokens++;
+        }
+        int bonus = Math.min(arabic, 120);
+        int digitLimit = Math.max(8, letters / 3);
+        if (digits > digitLimit) bonus -= (digits - digitLimit) * 2;
+        bonus -= Math.max(0, singleLetterTokens - tokens.length / 3) * 3;
+        return bonus;
+    }
     private void publishProcessedPdfPage(int index, String[] pageParts, int loadId, int pageCount) {
         runOnUiThread(() -> {
             if (loadId != pdfLoadGeneration || index < 0 || index >= pageChunks.length) return;
