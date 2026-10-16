@@ -495,6 +495,9 @@ public class MainActivity extends AppCompatActivity {
             }
             File model = new File(tessdata, "ara.traineddata");
             TessBaseAPI api = new TessBaseAPI();
+
+            // Reuse a valid local Arabic model first. This avoids downloading it
+            // again on later image reads and keeps OCR fully on-device.
             if (model.isFile() && model.length() > 1000000
                     && api.init(dataDir.getAbsolutePath(), "ara")) {
                 api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
@@ -508,38 +511,54 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> status.setText("جارٍ تنزيل بيانات OCR العربية لأول مرة…"));
             File temporaryModel = new File(tessdata, "ara.traineddata.download");
             if (temporaryModel.exists()) temporaryModel.delete();
-            HttpURLConnection connection = null;
-            try {
-                connection = (HttpURLConnection) new URL(
-                        "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata")
-                        .openConnection();
-                connection.setInstanceFollowRedirects(true);
-                connection.setConnectTimeout(25000);
-                connection.setReadTimeout(60000);
-                connection.setRequestProperty("User-Agent", "PdfVoiceReader-Android");
-                int responseCode = connection.getResponseCode();
-                if (responseCode != HttpURLConnection.HTTP_OK) {
-                    throw new java.io.IOException("فشل تنزيل نموذج OCR (HTTP " + responseCode + ")");
+
+            // Some mobile networks cannot reach raw.githubusercontent.com.
+            // Try jsDelivr as a second source before reporting a download error.
+            String[] modelUrls = {
+                "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/ara.traineddata",
+                "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/ara.traineddata"
+            };
+            Exception lastDownloadError = null;
+            for (String modelUrl : modelUrls) {
+                HttpURLConnection connection = null;
+                try {
+                    if (temporaryModel.exists()) temporaryModel.delete();
+                    connection = (HttpURLConnection) new URL(modelUrl).openConnection();
+                    connection.setInstanceFollowRedirects(true);
+                    connection.setConnectTimeout(20000);
+                    connection.setReadTimeout(60000);
+                    connection.setRequestProperty("User-Agent", "PdfVoiceReader-Android");
+                    int responseCode = connection.getResponseCode();
+                    if (responseCode != HttpURLConnection.HTTP_OK) {
+                        throw new java.io.IOException("HTTP " + responseCode);
+                    }
+                    try (InputStream in = connection.getInputStream();
+                         FileOutputStream out = new FileOutputStream(temporaryModel)) {
+                        byte[] buffer = new byte[16384];
+                        int count;
+                        while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                        out.getFD().sync();
+                    }
+                    if (temporaryModel.isFile() && temporaryModel.length() > 1000000) {
+                        lastDownloadError = null;
+                        break;
+                    }
+                    throw new java.io.IOException("ملف نموذج OCR الذي تم تنزيله غير مكتمل");
+                } catch (Exception downloadError) {
+                    lastDownloadError = downloadError;
+                    temporaryModel.delete();
+                } finally {
+                    if (connection != null) connection.disconnect();
                 }
-                try (InputStream in = connection.getInputStream();
-                     FileOutputStream out = new FileOutputStream(temporaryModel)) {
-                    byte[] buffer = new byte[16384];
-                    int count;
-                    while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-                    out.getFD().sync();
-                }
-            } catch (Exception downloadError) {
+            }
+
+            if (lastDownloadError != null || !temporaryModel.isFile()
+                    || temporaryModel.length() < 1000000) {
                 temporaryModel.delete();
                 throw new IllegalStateException(
                         "تعذر تنزيل نموذج OCR العربي. تحقق من اتصال الإنترنت ثم أعد المحاولة. التفاصيل: "
-                                + downloadError.getMessage(), downloadError);
-            } finally {
-                if (connection != null) connection.disconnect();
-            }
-
-            if (!temporaryModel.isFile() || temporaryModel.length() < 1000000) {
-                temporaryModel.delete();
-                throw new IllegalStateException("نموذج OCR العربي غير مكتمل؛ أعد المحاولة مع اتصال مستقر.");
+                                + (lastDownloadError == null ? "نموذج غير مكتمل" : lastDownloadError.getMessage()),
+                        lastDownloadError);
             }
             if (!temporaryModel.renameTo(model)) {
                 temporaryModel.delete();
