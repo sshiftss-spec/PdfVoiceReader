@@ -60,6 +60,8 @@ public class MainActivity extends AppCompatActivity {
     private TextToSpeech tts;
     private String[] chunks = new String[0];
     private String[][] pageChunks = new String[0][];
+    private String[] pageExtractedTexts = new String[0];
+    private String currentPageExtractedText = "";
     private boolean[] pageTextReady = new boolean[0];
     private volatile int pdfLoadGeneration = 0;
     private int chunkIndex = 0;
@@ -196,6 +198,12 @@ public class MainActivity extends AppCompatActivity {
         status.setText("جاهز");
         status.setTextSize(18);
         root.addView(status);
+
+        Button showExtractedTextButton = makeButton(R.string.read_aloud,
+                v -> showExtractedText());
+        showExtractedTextButton.setText("عرض النص المستخرج");
+        showExtractedTextButton.setContentDescription("عرض النص الذي سيقرأه الصوت من الصفحة الحالية");
+        root.addView(showExtractedTextButton);
 
         pageCounter = new TextView(this);
         pageCounter.setText(R.string.page_not_loaded);
@@ -403,6 +411,8 @@ public class MainActivity extends AppCompatActivity {
                     pdfFileDescriptor = readyDescriptor;
                     pdfRenderer = readyRenderer;
                     pageChunks = initialPages;
+                    pageExtractedTexts = new String[pageCount];
+                    currentPageExtractedText = "";
                     pageTextReady = initialReady;
                     chunks = pageChunks.length > 0 ? pageChunks[0] : new String[0];
                     chunkIndex = 0;
@@ -453,7 +463,7 @@ public class MainActivity extends AppCompatActivity {
                 String[] pageParts = pageText.trim().isEmpty()
                         ? new String[0] : splitText(pageText, 1600);
                 processed[i] = true;
-                publishProcessedPdfPage(i, pageParts, loadId, pageCount);
+                publishProcessedPdfPage(i, pageParts, pageText, loadId, pageCount);
             }
         } catch (Exception loadError) {
             // If PDFBox cannot open the text layer at all, fall back to OCR for
@@ -466,7 +476,7 @@ public class MainActivity extends AppCompatActivity {
                 String[] pageParts = pageText.trim().isEmpty()
                         ? new String[0] : splitText(pageText, 1600);
                 processed[i] = true;
-                publishProcessedPdfPage(i, pageParts, loadId, pageCount);
+                publishProcessedPdfPage(i, pageParts, pageText, loadId, pageCount);
             }
         }
 
@@ -613,10 +623,13 @@ public class MainActivity extends AppCompatActivity {
         bonus -= Math.max(0, singleLetterTokens - tokens.length / 3) * 3;
         return bonus;
     }
-    private void publishProcessedPdfPage(int index, String[] pageParts, int loadId, int pageCount) {
+    private void publishProcessedPdfPage(int index, String[] pageParts, String pageText,
+                                          int loadId, int pageCount) {
         runOnUiThread(() -> {
             if (loadId != pdfLoadGeneration || index < 0 || index >= pageChunks.length) return;
             pageChunks[index] = pageParts;
+            if (pageExtractedTexts.length == pageChunks.length) pageExtractedTexts[index] = pageText;
+            if (currentPage == index) currentPageExtractedText = pageText == null ? "" : pageText;
             pageTextReady[index] = true;
             if (currentPage == index) {
                 chunks = pageParts;
@@ -639,6 +652,8 @@ public class MainActivity extends AppCompatActivity {
             if (tts != null) tts.stop();
             closePdfRenderer();
             pageChunks = new String[0][];
+            pageExtractedTexts = new String[0];
+            currentPageExtractedText = normalized;
             chunks = normalized.isEmpty() ? new String[0] : splitText(normalized, 1600);
             chunkIndex = 0;
             resumeCharIndex = 0;
@@ -993,6 +1008,8 @@ public class MainActivity extends AppCompatActivity {
             resetPageZoom();
             currentPage = index;
             chunks = index < pageChunks.length ? pageChunks[index] : new String[0];
+            currentPageExtractedText = index < pageExtractedTexts.length
+                    && pageExtractedTexts[index] != null ? pageExtractedTexts[index] : "";
             chunkIndex = 0;
             resumeCharIndex = 0;
             speechPaused = false;
@@ -1013,6 +1030,31 @@ public class MainActivity extends AppCompatActivity {
             try { pdfFileDescriptor.close(); } catch (Exception ignored) {}
             pdfFileDescriptor = null;
         }
+    }
+
+    private void showExtractedText() {
+        String text = currentPageExtractedText == null ? "" : currentPageExtractedText.trim();
+        if (text.isEmpty()) {
+            new androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("النص المستخرج")
+                    .setMessage("لم يجهز النص بعد لهذه الصفحة، أو لم يتمكن التطبيق من استخراجه.")
+                    .setPositiveButton("حسنًا", null)
+                    .show();
+            return;
+        }
+        TextView preview = new TextView(this);
+        preview.setText(text);
+        preview.setTextSize(18);
+        preview.setTextIsSelectable(true);
+        preview.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG_RTL);
+        preview.setPadding(36, 24, 36, 24);
+        ScrollView previewScroll = new ScrollView(this);
+        previewScroll.addView(preview);
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("النص المستخرج — قارن مع الصفحة")
+                .setView(previewScroll)
+                .setPositiveButton("حسنًا", null)
+                .show();
     }
 
     private void startCurrentFromBeginning() {
