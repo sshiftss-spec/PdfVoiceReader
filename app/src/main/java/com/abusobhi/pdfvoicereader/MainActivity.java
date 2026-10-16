@@ -393,8 +393,13 @@ public class MainActivity extends AppCompatActivity {
                             final int totalPages = doc.getNumberOfPages();
                             runOnUiThread(() -> status.setText(
                                     "جارٍ تحسين قراءة الصفحة " + pageNumber + " من " + totalPages));
-                            String ocrText = normalizeTextForSpeech(
-                                    runOcr(renderPdfPageForOcr(newRenderer, i)));
+                            Bitmap ocrBitmap = renderPdfPageForOcr(newRenderer, i);
+                            String ocrText;
+                            try {
+                                ocrText = normalizeTextForSpeech(runOcr(ocrBitmap));
+                            } finally {
+                                if (!ocrBitmap.isRecycled()) ocrBitmap.recycle();
+                            }
                             if (!ocrText.isEmpty()) {
                                 pageText = ocrText;
                             }
