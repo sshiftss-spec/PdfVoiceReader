@@ -563,9 +563,31 @@ public class MainActivity extends AppCompatActivity {
         if (raw == null || raw.trim().isEmpty()) return "";
         StringBuilder out = new StringBuilder(raw.length());
         for (String sourceLine : raw.replace("\r", "").split("\n")) {
-            String line = sourceLine.replaceAll("[\\t ]+", " ").replaceAll("[|_~^`]+", " ").trim();
-            // Preserve Arabic vowel marks, Quranic signs, punctuation and real numbers.
-            line = line.replaceAll(" {2,}", " ").trim();
+            StringBuilder lineOut = new StringBuilder(sourceLine.length());
+            for (int i = 0; i < sourceLine.length(); i++) {
+                char c = sourceLine.charAt(i);
+
+                // Test mode for scanned Arabic books: ignore vowel marks, elongation,
+                // punctuation and brackets so TTS does not try to pronounce them.
+                boolean arabicDiacritic =
+                        (c >= 0x064B && c <= 0x065F) ||
+                        c == 0x0670 ||
+                        (c >= 0x06D6 && c <= 0x06ED);
+                boolean punctuationOrBracket =
+                        (c >= 0x2000 && c <= 0x206F) ||
+                        (c >= 0x2E00 && c <= 0x2E7F) ||
+                        (c >= 0x3001 && c <= 0x303F) ||
+                        "()[]{}<>«»‹›.,;:!?،؛؟٬٫'\\"".indexOf(c) >= 0 ||
+                        c == 0x0640;
+                if (arabicDiacritic || punctuationOrBracket) {
+                    lineOut.append(' ');
+                } else if (c == '\t' || c == ' ') {
+                    lineOut.append(' ');
+                } else {
+                    lineOut.append(c);
+                }
+            }
+            String line = lineOut.toString().replaceAll(" +", " ").trim();
             if (!line.isEmpty()) out.append(line).append('\n');
         }
         return out.toString().trim();
