@@ -60,6 +60,8 @@ public class MainActivity extends AppCompatActivity {
     private TextToSpeech tts;
     private String[] chunks = new String[0];
     private String[][] pageChunks = new String[0][];
+    private boolean[] pageTextReady = new boolean[0];
+    private volatile int pdfLoadGeneration = 0;
     private int chunkIndex = 0;
     private int resumeCharIndex = 0;
     private int utteranceBaseOffset = 0;
@@ -91,7 +93,8 @@ public class MainActivity extends AppCompatActivity {
                 String name = uri.getLastPathSegment();
                 fileName.setText(name != null ? name : "PDF");
                 status.setText(R.string.loading);
-                new Thread(() -> loadPdf(uri)).start();
+                final int loadId = ++pdfLoadGeneration;
+                new Thread(() -> loadPdf(uri, loadId)).start();
             });
 
     private final ActivityResultLauncher<String[]> openImage = registerForActivityResult(
@@ -365,7 +368,7 @@ public class MainActivity extends AppCompatActivity {
         return b;
     }
 
-    private void loadPdf(Uri uri) {
+    private void loadPdf(Uri uri, int loadId) {
         ParcelFileDescriptor newDescriptor = null;
         PdfRenderer newRenderer = null;
         try {
@@ -373,72 +376,240 @@ public class MainActivity extends AppCompatActivity {
             if (newDescriptor == null) throw new IllegalStateException("تعذر فتح ملف PDF");
             newRenderer = new PdfRenderer(newDescriptor);
 
-            String[][] extractedPages = new String[0][];
-            String extractionNote = "";
-            try (InputStream in = getContentResolver().openInputStream(uri);
-                 PDDocument doc = in == null ? null : PDDocument.load(in)) {
-                if (doc != null) {
-                    extractedPages = new String[doc.getNumberOfPages()][];
-                    boolean hasText = false;
-                    for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                        String pageText = normalizeTextForSpeech(
-                                ArabicPdfTextStripper.extractPage(doc, i + 1));
-                        if (!pageText.isEmpty()) {
-                            extractedPages[i] = splitText(pageText, 1600);
-                            hasText = true;
-                        } else {
-                            extractedPages[i] = new String[0];
-                        }
-                    }
-                    if (!hasText) extractionNote = getString(R.string.no_extractable_text);
-                } else {
-                    extractionNote = getString(R.string.no_extractable_text);
-                }
-            } catch (Exception textError) {
-                extractionNote = getString(R.string.no_extractable_text);
-            }
-
             final ParcelFileDescriptor readyDescriptor = newDescriptor;
             final PdfRenderer readyRenderer = newRenderer;
-            final String[][] readyPages = extractedPages;
-            final String readyNote = extractionNote;
+            final int pageCount = readyRenderer.getPageCount();
+            final String[][] initialPages = new String[pageCount][];
+            final boolean[] initialReady = new boolean[pageCount];
+            for (int i = 0; i < pageCount; i++) initialPages[i] = new String[0];
             newDescriptor = null;
             newRenderer = null;
+
+            // Show the PDF immediately. Text extraction/OCR happens afterwards,
+            // one page at a time, instead of blocking the UI until the whole book is processed.
+            java.util.concurrent.CountDownLatch uiReady = new java.util.concurrent.CountDownLatch(1);
             runOnUiThread(() -> {
-                if (tts != null) tts.stop();
-                speechPaused = false;
-                resumeCharIndex = 0;
-                currentUtteranceId = "";
-                closePdfRenderer();
-                pdfFileDescriptor = readyDescriptor;
-                pdfRenderer = readyRenderer;
-                pageChunks = readyPages;
-                chunks = pageChunks.length > 0 ? pageChunks[0] : new String[0];
-                chunkIndex = 0;
-                currentPage = 0;
-                showPage(0);
-                if (readyNote.isEmpty()) {
-                    int totalChunks = 0;
-                    for (String[] pageParts : pageChunks) totalChunks += pageParts.length;
-                    status.setText(getString(R.string.pdf_loaded, pdfRenderer.getPageCount(), totalChunks));
-                } else {
-                    status.setText(getString(R.string.pdf_loaded_no_text, pdfRenderer.getPageCount()));
-                    Toast.makeText(this, readyNote, Toast.LENGTH_LONG).show();
+                try {
+                    if (loadId != pdfLoadGeneration) {
+                        readyRenderer.close();
+                        try { readyDescriptor.close(); } catch (Exception ignored) {}
+                        return;
+                    }
+                    if (tts != null) tts.stop();
+                    speechPaused = false;
+                    resumeCharIndex = 0;
+                    currentUtteranceId = "";
+                    closePdfRenderer();
+                    pdfFileDescriptor = readyDescriptor;
+                    pdfRenderer = readyRenderer;
+                    pageChunks = initialPages;
+                    pageTextReady = initialReady;
+                    chunks = pageChunks.length > 0 ? pageChunks[0] : new String[0];
+                    chunkIndex = 0;
+                    currentPage = 0;
+                    showPage(0);
+                    status.setText("تم فتح الكتاب؛ جارٍ تجهيز نص الصفحة الأولى...");
+                } finally {
+                    uiReady.countDown();
                 }
             });
+            uiReady.await();
+            if (loadId != pdfLoadGeneration) return;
+
+            extractPdfPagesProgressively(uri, loadId, pageCount);
         } catch (Exception e) {
             if (newRenderer != null) newRenderer.close();
             if (newDescriptor != null) {
                 try { newDescriptor.close(); } catch (Exception ignored) {}
             }
-            runOnUiThread(() -> {
-                status.setText(R.string.error);
-                Toast.makeText(this, e.getMessage() == null ? getString(R.string.error) : e.getMessage(),
-                        Toast.LENGTH_LONG).show();
-            });
+            if (loadId == pdfLoadGeneration) {
+                runOnUiThread(() -> {
+                    status.setText(R.string.error);
+                    Toast.makeText(this, e.getMessage() == null ? getString(R.string.error) : e.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                });
+            }
         }
     }
 
+    private void extractPdfPagesProgressively(Uri uri, int loadId, int pageCount) {
+        boolean[] processed = new boolean[pageCount];
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             PDDocument doc = in == null ? null : PDDocument.load(in)) {
+            if (doc == null) throw new IllegalStateException("تعذر فتح محتوى PDF لاستخراج النص");
+            for (int i = 0; i < pageCount; i++) {
+                if (loadId != pdfLoadGeneration) return;
+                String pageText = "";
+                try {
+                    pageText = normalizeTextForSpeech(
+                            ArabicPdfTextStripper.extractPage(doc, i + 1));
+                } catch (Exception ignored) {
+                    // A damaged/unusual text layer should not prevent OCR on this page.
+                }
+                if (pageText.trim().isEmpty()) {
+                    pageText = recognizePdfPageWithOcr(uri, i, loadId);
+                }
+                if (loadId != pdfLoadGeneration) return;
+                String[] pageParts = pageText.trim().isEmpty()
+                        ? new String[0] : splitText(pageText, 1600);
+                processed[i] = true;
+                publishProcessedPdfPage(i, pageParts, loadId, pageCount);
+            }
+        } catch (Exception loadError) {
+            // If PDFBox cannot open the text layer at all, fall back to OCR for
+            // every page rather than leaving a scanned book unreadable.
+            for (int i = 0; i < pageCount; i++) {
+                if (loadId != pdfLoadGeneration) return;
+                if (processed[i]) continue;
+                String pageText = recognizePdfPageWithOcr(uri, i, loadId);
+                if (loadId != pdfLoadGeneration) return;
+                String[] pageParts = pageText.trim().isEmpty()
+                        ? new String[0] : splitText(pageText, 1600);
+                processed[i] = true;
+                publishProcessedPdfPage(i, pageParts, loadId, pageCount);
+            }
+        }
+
+        if (loadId != pdfLoadGeneration) return;
+        runOnUiThread(() -> {
+            if (loadId != pdfLoadGeneration || pageChunks.length != pageCount) return;
+            int totalChunks = 0;
+            for (String[] pageParts : pageChunks) {
+                if (pageParts != null) totalChunks += pageParts.length;
+            }
+            if (totalChunks > 0) {
+                if (chunks.length == 0 && currentPage >= 0 && currentPage < pageChunks.length) {
+                    chunks = pageChunks[currentPage] == null ? new String[0] : pageChunks[currentPage];
+                }
+                if (tts == null || !tts.isSpeaking()) {
+                    status.setText(getString(R.string.pdf_loaded, pageCount, totalChunks));
+                }
+            } else {
+                status.setText(getString(R.string.pdf_loaded_no_text, pageCount));
+                Toast.makeText(this, "لم يُعثر على نص قابل للقراءة في صفحات هذا الملف.", Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private String recognizePdfPageWithOcr(Uri uri, int pageIndex, int loadId) {
+        if (loadId != pdfLoadGeneration) return "";
+        runOnUiThread(() -> {
+            if (loadId == pdfLoadGeneration) {
+                status.setText("جارٍ قراءة الصفحة " + (pageIndex + 1) + " ضوئيًا...");
+            }
+        });
+        ParcelFileDescriptor descriptor = null;
+        PdfRenderer renderer = null;
+        Bitmap bitmap = null;
+        try {
+            descriptor = getContentResolver().openFileDescriptor(uri, "r");
+            if (descriptor == null) return "";
+            renderer = new PdfRenderer(descriptor);
+            if (pageIndex < 0 || pageIndex >= renderer.getPageCount()) return "";
+            try (PdfRenderer.Page page = renderer.openPage(pageIndex)) {
+                int targetWidth = 1800;
+                int targetHeight = Math.max(1, (int) ((double) page.getHeight()
+                        * targetWidth / Math.max(1, page.getWidth())));
+                if (targetHeight > 2400) {
+                    targetHeight = 2400;
+                    targetWidth = Math.max(1, (int) ((double) page.getWidth()
+                            * targetHeight / Math.max(1, page.getHeight())));
+                }
+                bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            }
+            if (loadId != pdfLoadGeneration) return "";
+            return normalizeTextForSpeech(runPdfPageOcr(bitmap));
+        } catch (Exception ocrError) {
+            return "";
+        } finally {
+            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+            if (renderer != null) renderer.close();
+            if (descriptor != null) {
+                try { descriptor.close(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    /** OCR policy for Arabic book pages: favor coherent block order over sparse fragments. */
+    private String runPdfPageOcr(Bitmap bitmap) throws Exception {
+        ensureArabicOcrReady();
+        synchronized (this) {
+            if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
+            Bitmap enhanced = prepareOcrBitmap(bitmap);
+            Bitmap[] candidates = enhanced == bitmap ? new Bitmap[]{bitmap} : new Bitmap[]{bitmap, enhanced};
+            String bestText = "";
+            int bestScore = Integer.MIN_VALUE;
+            try {
+                // Sparse-text mode can scramble the order of Arabic book lines.
+                int[] modes = {TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK, TessBaseAPI.PageSegMode.PSM_AUTO};
+                for (Bitmap candidate : candidates) {
+                    for (int mode : modes) {
+                        tessBaseAPI.setPageSegMode(mode);
+                        String text = cleanPdfOcrText(recognizeBitmap(candidate));
+                        int score = ocrTextScore(text) + pdfArabicQualityBonus(text);
+                        if (score > bestScore) { bestScore = score; bestText = text; }
+                    }
+                }
+            } finally {
+                tessBaseAPI.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+                if (enhanced != bitmap && !enhanced.isRecycled()) enhanced.recycle();
+            }
+            return bestText;
+        }
+    }
+
+    private String cleanPdfOcrText(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return "";
+        StringBuilder out = new StringBuilder(raw.length());
+        for (String sourceLine : raw.replace("\r", "").split("\n")) {
+            String line = sourceLine.replaceAll("[\\t ]+", " ").replaceAll("[|_~^`]+", " ").trim();
+            // Preserve Arabic vowel marks, Quranic signs, punctuation and real numbers.
+            line = line.replaceAll(" {2,}", " ").trim();
+            if (!line.isEmpty()) out.append(line).append('\n');
+        }
+        return out.toString().trim();
+    }
+
+    private int pdfArabicQualityBonus(String text) {
+        if (text == null || text.trim().isEmpty()) return -1000;
+        int arabic = 0, digits = 0, letters = 0, singleLetterTokens = 0;
+        String[] tokens = text.trim().split("\\s+");
+        for (String token : tokens) {
+            int tokenArabic = 0;
+            for (int i = 0; i < token.length(); i++) {
+                char c = token.charAt(i);
+                if (((c >= 0x0621 && c <= 0x064A) || (c >= 0x066E && c <= 0x06D3) || (c >= 0x0750 && c <= 0x077F)) && Character.isLetter(c)) { arabic++; tokenArabic++; }
+                if (Character.isDigit(c) || (c >= 0x0660 && c <= 0x0669)) digits++;
+                if (Character.isLetter(c)) letters++;
+            }
+            if (tokenArabic == 1) singleLetterTokens++;
+        }
+        int bonus = Math.min(arabic, 120);
+        int digitLimit = Math.max(8, letters / 3);
+        if (digits > digitLimit) bonus -= (digits - digitLimit) * 2;
+        bonus -= Math.max(0, singleLetterTokens - tokens.length / 3) * 3;
+        return bonus;
+    }
+    private void publishProcessedPdfPage(int index, String[] pageParts, int loadId, int pageCount) {
+        runOnUiThread(() -> {
+            if (loadId != pdfLoadGeneration || index < 0 || index >= pageChunks.length) return;
+            pageChunks[index] = pageParts;
+            pageTextReady[index] = true;
+            if (currentPage == index) {
+                chunks = pageParts;
+                chunkIndex = 0;
+                resumeCharIndex = 0;
+                if (pageParts.length > 0) {
+                    status.setText("أصبحت الصفحة " + (index + 1) + " جاهزة للقراءة");
+                } else {
+                    status.setText("لم يُعثر على نص واضح في الصفحة " + (index + 1));
+                }
+            } else if (tts == null || !tts.isSpeaking()) {
+                status.setText("تم تجهيز " + (index + 1) + " من " + pageCount + " صفحة");
+            }
+        });
+    }
 
     private void setStandaloneText(String rawText) {
         String normalized = normalizeTextForSpeech(rawText);
@@ -823,6 +994,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startCurrentFromBeginning() {
+        if (pdfRenderer != null && currentPage >= 0 && currentPage < pageTextReady.length
+                && !pageTextReady[currentPage]) {
+            status.setText("جارٍ تجهيز نص الصفحة الحالية؛ انتظر قليلًا ثم أعد الضغط.");
+            return;
+        }
+        if (pdfRenderer != null && chunks.length == 0) {
+            Toast.makeText(this, "لم يُعثر على نص واضح في هذه الصفحة.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         resumeCharIndex = 0;
         speechPaused = false;
         speakRemaining();
