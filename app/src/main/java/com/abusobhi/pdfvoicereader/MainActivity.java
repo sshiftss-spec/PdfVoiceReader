@@ -743,9 +743,9 @@ public class MainActivity extends AppCompatActivity {
             int lettersInToken = 0;
             for (int i = 0; i < token.length(); i++) {
                 char ch = token.charAt(i);
-                if ((ch >= '\\u0621' && ch <= '\\u064A')
-                        || (ch >= '\\u066E' && ch <= '\\u06D3')
-                        || (ch >= '\\u0750' && ch <= '\\u077F')) {
+                if ((ch >= '\u0621' && ch <= '\u064A')
+                        || (ch >= '\u066E' && ch <= '\u06D3')
+                        || (ch >= '\u0750' && ch <= '\u077F')) {
                     if (Character.isLetter(ch)) {
                         lettersInToken++;
                         arabicLetters++;
