@@ -3,6 +3,11 @@ package com.abusobhi.pdfvoicereader;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Color;
 import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
@@ -471,17 +476,135 @@ public class MainActivity extends AppCompatActivity {
 
     private String runOcr(Bitmap bitmap) throws Exception {
         ensureArabicOcrReady();
-        runOnUiThread(() -> status.setText("تم تجهيز OCR العربي؛ جارٍ استخراج النص من الصورة..."));
+        runOnUiThread(() -> status.setText("جارٍ تحليل تخطيط الصورة واختيار أفضل قراءة..."));
         synchronized (this) {
             if (tessBaseAPI == null) throw new IllegalStateException("محرك OCR العربي غير جاهز");
+
+            // Try multiple page-layout modes. Receipts and transfer notices often
+            // have labels on one side and values on the other; a single layout
+            // mode can incorrectly read the two columns separately.
+            String bestText = "";
+            int bestScore = Integer.MIN_VALUE;
+            Bitmap enhanced = prepareOcrBitmap(bitmap);
+            Bitmap[] candidates = enhanced == bitmap
+                    ? new Bitmap[]{bitmap}
+                    : new Bitmap[]{bitmap, enhanced};
             try {
-                tessBaseAPI.setImage(bitmap);
-                String result = tessBaseAPI.getUTF8Text();
-                return result == null ? "" : result;
+                for (Bitmap candidate : candidates) {
+                    int[] modes = {
+                            TessBaseAPI.PageSegMode.PSM_AUTO,
+                            TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK,
+                            TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT
+                    };
+                    for (int mode : modes) {
+                        tessBaseAPI.setPageSegMode(mode);
+                        String text = recognizeBitmap(candidate);
+                        int score = ocrTextScore(text) + receiptLayoutBonus(text);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestText = text;
+                        }
+                    }
+                }
             } finally {
-                tessBaseAPI.clear();
+                tessBaseAPI.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+                if (enhanced != bitmap && !enhanced.isRecycled()) enhanced.recycle();
+            }
+            return bestText;
+        }
+    }
+
+    // Prefer OCR outputs that keep receipt labels and their values together
+    // on individual lines, without rewriting or guessing any extracted data.
+    private int receiptLayoutBonus(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        String[] labels = {
+                "اسم المرسل", "اسم المستلم", "حساب المرسل", "حساب المستلم",
+                "رقم العملية", "تاريخ العملية", "المبلغ", "الملاحظة", "العملية"
+        };
+        int bonus = 0;
+        for (String line : text.split("\\n")) {
+            String compact = line.replaceAll("[\\\\t ]+", " ").trim();
+            int found = 0;
+            for (String label : labels) {
+                if (compact.contains(label)) found++;
+            }
+            // A line with a field label and other content is more useful than
+            // a label-only line, as long as we do not invent a value.
+            if (found == 1 && compact.length() > 14) bonus += 12;
+            else if (found > 1) bonus -= 8;
+        }
+        return bonus;
+    }
+
+    private String recognizeBitmap(Bitmap bitmap) {
+        try {
+            tessBaseAPI.setImage(bitmap);
+            String result = tessBaseAPI.getUTF8Text();
+            return result == null ? "" : result;
+        } finally {
+            tessBaseAPI.clear();
+        }
+    }
+
+    private Bitmap prepareOcrBitmap(Bitmap source) {
+        int sourceWidth = source.getWidth();
+        int sourceHeight = source.getHeight();
+        int longestSide = Math.max(sourceWidth, sourceHeight);
+        float scale = 1f;
+        if (longestSide < 1800) {
+            scale = Math.min(2f, 1800f / longestSide);
+        } else if (longestSide > 2800) {
+            scale = 2400f / longestSide;
+        }
+
+        int border = 16;
+        int contentWidth = Math.max(1, Math.round(sourceWidth * scale));
+        int contentHeight = Math.max(1, Math.round(sourceHeight * scale));
+        Bitmap output = Bitmap.createBitmap(
+                contentWidth + border * 2, contentHeight + border * 2, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(output);
+        canvas.drawColor(Color.WHITE);
+
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+        // Grayscale with a mild contrast boost; avoid hard thresholding, which
+        // can erase Arabic dots and tashkeel in faint scans.
+        float contrast = 1.15f;
+        float offset = 128f * (1f - contrast);
+        ColorMatrix grayscale = new ColorMatrix();
+        grayscale.setSaturation(0f);
+        ColorMatrix contrastMatrix = new ColorMatrix(new float[] {
+                contrast, 0, 0, 0, offset,
+                0, contrast, 0, 0, offset,
+                0, 0, contrast, 0, offset,
+                0, 0, 0, 1, 0
+        });
+        grayscale.postConcat(contrastMatrix);
+        paint.setColorFilter(new ColorMatrixColorFilter(grayscale));
+        Rect destination = new Rect(border, border, border + contentWidth, border + contentHeight);
+        canvas.drawBitmap(source, null, destination, paint);
+        return output;
+    }
+
+    private int ocrTextScore(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        int arabicLetters = 0;
+        int words = 0;
+        boolean inWord = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            boolean arabic = (c >= '\u0621' && c <= '\u064A')
+                    || (c >= '\u066E' && c <= '\u06D3')
+                    || (c >= '\u0750' && c <= '\u077F');
+            if (arabic && Character.isLetter(c)) arabicLetters++;
+            if (Character.isLetterOrDigit(c)) {
+                if (!inWord) words++;
+                inWord = true;
+            } else {
+                inWord = false;
             }
         }
+        return arabicLetters + words * 2;
     }
 
     private void ensureArabicOcrReady() throws Exception {
