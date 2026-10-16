@@ -579,8 +579,8 @@ public class MainActivity extends AppCompatActivity {
             int tokenArabic = 0;
             for (int i = 0; i < token.length(); i++) {
                 char c = token.charAt(i);
-                if (((c >= '\\u0621' && c <= '\\u064A') || (c >= '\\u066E' && c <= '\\u06D3') || (c >= '\\u0750' && c <= '\\u077F')) && Character.isLetter(c)) { arabic++; tokenArabic++; }
-                if (Character.isDigit(c) || (c >= '\\u0660' && c <= '\\u0669')) digits++;
+                if (((c >= 0x0621 && c <= 0x064A) || (c >= 0x066E && c <= 0x06D3) || (c >= 0x0750 && c <= 0x077F)) && Character.isLetter(c)) { arabic++; tokenArabic++; }
+                if (Character.isDigit(c) || (c >= 0x0660 && c <= 0x0669)) digits++;
                 if (Character.isLetter(c)) letters++;
             }
             if (tokenArabic == 1) singleLetterTokens++;
