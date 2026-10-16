@@ -381,8 +381,35 @@ public class MainActivity extends AppCompatActivity {
                     extractedPages = new String[doc.getNumberOfPages()][];
                     boolean hasText = false;
                     for (int i = 0; i < doc.getNumberOfPages(); i++) {
-                        String pageText = normalizeTextForSpeech(
-                                ArabicPdfTextStripper.extractPage(doc, i + 1));
+                        // Preserve PDFBox's native extraction order for born-digital PDFs.
+                        // Geometry-based glyph sorting can split Arabic words into individual letters.
+                        PDFTextStripper nativeStripper = new PDFTextStripper();
+                        nativeStripper.setStartPage(i + 1);
+                        nativeStripper.setEndPage(i + 1);
+                        String pageText = normalizeTextForSpeech(nativeStripper.getText(doc));
+
+                        // If the embedded text layer is clearly corrupted (common in some scanned
+                        // Arabic books), OCR the rendered page instead of trusting the bad layer.
+                        if (looksLikeBadArabicExtraction(pageText)) {
+                            Bitmap pageBitmap = null;
+                            try (PdfRenderer.Page renderedPage = newRenderer.openPage(i)) {
+                                int targetWidth = Math.min(1800, Math.max(1200,
+                                        getResources().getDisplayMetrics().widthPixels * 2));
+                                int targetHeight = Math.max(1, (int) ((double) renderedPage.getHeight()
+                                        * targetWidth / renderedPage.getWidth()));
+                                pageBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
+                                renderedPage.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                                String ocrText = normalizeTextForSpeech(runOcr(pageBitmap));
+                                if (!ocrText.isEmpty() && !looksLikeBadArabicExtraction(ocrText)) {
+                                    pageText = ocrText;
+                                }
+                            } catch (Exception ocrError) {
+                                // Keep native extraction as a fallback if on-device OCR is unavailable.
+                            } finally {
+                                if (pageBitmap != null && !pageBitmap.isRecycled()) pageBitmap.recycle();
+                            }
+                        }
+
                         if (!pageText.isEmpty()) {
                             extractedPages[i] = splitText(pageText, 1600);
                             hasText = true;
@@ -699,6 +726,40 @@ public class MainActivity extends AppCompatActivity {
             ocrReady = true;
             runOnUiThread(() -> status.setText("تم تجهيز OCR العربي"));
         }
+    }
+
+    /**
+     * Detects likely character-by-character Arabic extraction corruption.
+     * Ordinary Arabic prose has many multi-letter words; a damaged text layer
+     * often produces a high proportion of one-letter tokens.
+     */
+    private boolean looksLikeBadArabicExtraction(String text) {
+        if (text == null || text.trim().isEmpty()) return true;
+        String[] tokens = text.trim().split("\\s+");
+        int arabicTokens = 0;
+        int oneLetterArabicTokens = 0;
+        int arabicLetters = 0;
+        for (String token : tokens) {
+            int lettersInToken = 0;
+            for (int i = 0; i < token.length(); i++) {
+                char ch = token.charAt(i);
+                if ((ch >= '\\u0621' && ch <= '\\u064A')
+                        || (ch >= '\\u066E' && ch <= '\\u06D3')
+                        || (ch >= '\\u0750' && ch <= '\\u077F')) {
+                    if (Character.isLetter(ch)) {
+                        lettersInToken++;
+                        arabicLetters++;
+                    }
+                }
+            }
+            if (lettersInToken > 0) {
+                arabicTokens++;
+                if (lettersInToken == 1) oneLetterArabicTokens++;
+            }
+        }
+        if (arabicLetters < 20 || arabicTokens < 10) return false;
+        return oneLetterArabicTokens >= 0.42 * arabicTokens
+                || (arabicTokens > 0 && (double) arabicLetters / arabicTokens < 1.65);
     }
 
     private String normalizeTextForSpeech(String rawText) {
