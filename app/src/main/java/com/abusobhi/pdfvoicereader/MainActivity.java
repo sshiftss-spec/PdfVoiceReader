@@ -383,6 +383,23 @@ public class MainActivity extends AppCompatActivity {
                     for (int i = 0; i < doc.getNumberOfPages(); i++) {
                         String pageText = normalizeTextForSpeech(
                                 ArabicPdfTextStripper.extractPage(doc, i + 1));
+
+                        // PDFs can contain text that is technically extractable but
+                        // unusable (for example, Arabic letters separated one by one).
+                        // Fall back to OCR on the rendered page when extraction is empty
+                        // or looks corrupted. Keep valid embedded text untouched.
+                        if (isPoorPdfText(pageText)) {
+                            final int pageNumber = i + 1;
+                            final int totalPages = doc.getNumberOfPages();
+                            runOnUiThread(() -> status.setText(
+                                    "جارٍ تحسين قراءة الصفحة " + pageNumber + " من " + totalPages));
+                            String ocrText = normalizeTextForSpeech(
+                                    runOcr(renderPdfPageForOcr(newRenderer, i)));
+                            if (!ocrText.isEmpty()) {
+                                pageText = ocrText;
+                            }
+                        }
+
                         if (!pageText.isEmpty()) {
                             extractedPages[i] = splitText(pageText, 1600);
                             hasText = true;
@@ -439,6 +456,48 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+
+    // Treat empty pages and text with many isolated one-letter tokens as
+    // extraction failures. This catches common Arabic PDF font-map/OCR issues.
+    private boolean isPoorPdfText(String text) {
+        if (text == null || text.trim().isEmpty()) return true;
+        String cleaned = text.replaceAll("[\\u064B-\\u065F\\u0670\\u0640]", " ").trim();
+        String[] tokens = cleaned.split("\\s+");
+        int arabicWords = 0;
+        int singleLetterWords = 0;
+        int arabicLetters = 0;
+        int allLetters = 0;
+        for (String token : tokens) {
+            String word = token.replaceAll("[^\\u0621-\\u064A\\u066E-\\u06D3\\u0750-\\u077F]", "");
+            if (!word.isEmpty()) {
+                arabicWords++;
+                if (word.length() == 1) singleLetterWords++;
+                arabicLetters += word.length();
+            }
+            for (int i = 0; i < token.length(); i++) {
+                if (Character.isLetter(token.charAt(i))) allLetters++;
+            }
+        }
+        if (arabicLetters < 12) return true;
+        double isolatedRatio = arabicWords == 0 ? 1.0 : (double) singleLetterWords / arabicWords;
+        double arabicRatio = allLetters == 0 ? 0.0 : (double) arabicLetters / allLetters;
+        return (arabicWords >= 12 && isolatedRatio >= 0.38)
+                || (allLetters >= 30 && arabicRatio < 0.45);
+    }
+
+    // Render a PDF page at a useful OCR resolution. The caller owns and recycles
+    // the bitmap returned by PdfRenderer; OCR itself remains on-device.
+    private Bitmap renderPdfPageForOcr(PdfRenderer renderer, int pageIndex) {
+        try (PdfRenderer.Page page = renderer.openPage(pageIndex)) {
+            float scale = Math.min(2.5f, 1800f / Math.max(1, page.getWidth()));
+            int width = Math.max(1, Math.round(page.getWidth() * scale));
+            int height = Math.max(1, Math.round(page.getHeight() * scale));
+            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            bitmap.eraseColor(Color.WHITE);
+            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            return bitmap;
+        }
+    }
 
     private void setStandaloneText(String rawText) {
         String normalized = normalizeTextForSpeech(rawText);
