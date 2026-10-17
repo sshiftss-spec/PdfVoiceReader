@@ -1,0 +1,2 @@
+Trigger Android build for feature/ocr-download-progress.
+This file is only a build trigger and is not part of the application.
