@@ -21,6 +21,7 @@ import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.widget.Button;
+import android.widget.ProgressBar;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -47,6 +48,7 @@ import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
     private TextView status;
+    private ProgressBar ocrDownloadProgress;
     private TextView fileName;
     private TextView pageCounter;
     private ImageView pageImage;
@@ -198,6 +200,13 @@ public class MainActivity extends AppCompatActivity {
         status.setText("جاهز");
         status.setTextSize(18);
         root.addView(status);
+
+        ocrDownloadProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        ocrDownloadProgress.setMax(100);
+        ocrDownloadProgress.setIndeterminate(true);
+        ocrDownloadProgress.setVisibility(View.GONE);
+        ocrDownloadProgress.setContentDescription("تقدم تحميل بيانات التعرف الضوئي على الحروف");
+        root.addView(ocrDownloadProgress, new LinearLayout.LayoutParams(-1, -2));
 
         Button showExtractedTextButton = makeButton(R.string.read_aloud,
                 v -> showExtractedText());
@@ -674,6 +683,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showOcrError(Exception e) {
         runOnUiThread(() -> {
+            if (ocrDownloadProgress != null) ocrDownloadProgress.setVisibility(View.GONE);
             status.setText("تعذر استخراج النص من الصورة");
             String message = e.getMessage();
             Toast.makeText(this,
@@ -839,7 +849,12 @@ public class MainActivity extends AppCompatActivity {
             api.recycle();
             if (model.exists()) model.delete();
 
-            runOnUiThread(() -> status.setText("جارٍ تنزيل بيانات OCR العربية لأول مرة…"));
+            runOnUiThread(() -> {
+                status.setText("جاري تحميل بيانات OCR العربية… يرجى الانتظار قليلاً");
+                ocrDownloadProgress.setProgress(0);
+                ocrDownloadProgress.setIndeterminate(true);
+                ocrDownloadProgress.setVisibility(View.VISIBLE);
+            });
             File temporaryModel = new File(tessdata, "ara.traineddata.download");
             if (temporaryModel.exists()) temporaryModel.delete();
 
@@ -863,12 +878,31 @@ public class MainActivity extends AppCompatActivity {
                     if (responseCode != HttpURLConnection.HTTP_OK) {
                         throw new java.io.IOException("HTTP " + responseCode);
                     }
+                    final int contentLength = connection.getContentLength();
+                    runOnUiThread(() -> {
+                        ocrDownloadProgress.setIndeterminate(contentLength <= 0);
+                        ocrDownloadProgress.setProgress(0);
+                    });
                     try (InputStream in = connection.getInputStream();
                          FileOutputStream out = new FileOutputStream(temporaryModel)) {
                         byte[] buffer = new byte[16384];
                         int count;
-                        while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+                        long totalDownloaded = 0;
+                        long lastUiUpdate = 0;
+                        while ((count = in.read(buffer)) != -1) {
+                            out.write(buffer, 0, count);
+                            totalDownloaded += count;
+                            if (contentLength > 0 && totalDownloaded - lastUiUpdate >= 262144) {
+                                lastUiUpdate = totalDownloaded;
+                                final int progress = (int) Math.min(100,
+                                        totalDownloaded * 100L / contentLength);
+                                runOnUiThread(() -> ocrDownloadProgress.setProgress(progress));
+                            }
+                        }
                         out.getFD().sync();
+                        if (contentLength > 0) {
+                            runOnUiThread(() -> ocrDownloadProgress.setProgress(100));
+                        }
                     }
                     if (temporaryModel.isFile() && temporaryModel.length() > 1000000) {
                         lastDownloadError = null;
@@ -905,7 +939,10 @@ public class MainActivity extends AppCompatActivity {
             api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
             tessBaseAPI = api;
             ocrReady = true;
-            runOnUiThread(() -> status.setText("تم تجهيز OCR العربي"));
+            runOnUiThread(() -> {
+                ocrDownloadProgress.setVisibility(View.GONE);
+                status.setText("تم تجهيز OCR العربي");
+            });
         }
     }
 
